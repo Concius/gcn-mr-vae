@@ -1,0 +1,11 @@
+# @package arm
+# Emb-MR: k-NN Laplacian over the current propagated embeddings, rebuilt periodically.
+name: emb_mr
+warmup_epochs: 100
+lambda_manifold: 1.0e-5
+laplacian: embeddings
+k_neighbors: 20
+rebuild_every: 50
+lambda_scale: none
+knn_backend: torch
+sigma: null

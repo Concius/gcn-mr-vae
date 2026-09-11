@@ -1,0 +1,11 @@
+# @package arm
+# CoOcc-MR (Sec. 5.3.2): fixed block-diagonal Laplacian from the interaction matrix R.
+name: coocc_mr
+warmup_epochs: 100
+lambda_manifold: 1.0e-5
+laplacian: cooccurrence
+k_neighbors: 20
+rebuild_every: 0
+lambda_scale: none
+knn_backend: torch
+sigma: null

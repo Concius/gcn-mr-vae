@@ -1,0 +1,12 @@
+# @package arm
+# MR-off continuation control (P0 fix #2): identical to emb_mr in every way
+# except lambda_manifold = 0. Same E, same W, same epoch-W reference snapshot.
+name: mr_off
+warmup_epochs: 100
+lambda_manifold: 0.0
+laplacian: none
+k_neighbors: 20
+rebuild_every: 50
+lambda_scale: none
+knn_backend: torch
+sigma: null

@@ -1,0 +1,11 @@
+# @package arm
+# BPR-only from scratch for E epochs, no phase structure.
+name: baseline
+warmup_epochs: 0
+lambda_manifold: 0.0
+laplacian: none          # none | embeddings | cooccurrence
+k_neighbors: 20
+rebuild_every: 50
+lambda_scale: none       # none (notebook) | per_epoch (lambda / n_batches)
+knn_backend: torch       # torch | sklearn
+sigma: null              # null -> median heuristic

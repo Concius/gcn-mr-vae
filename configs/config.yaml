@@ -1,0 +1,67 @@
+# Root config. Compose with: python -m src.train dataset=gowalla arm=emb_mr seed=2020
+defaults:
+  - dataset: gowalla
+  - arm: emb_mr
+  - _self_
+
+seed: 2020
+epochs: 1000            # total budget E for EVERY arm (P0 fix #1)
+device: cuda            # cuda | cpu | auto
+deterministic: false    # true -> cudnn.deterministic (slower; sparse mm still nondeterministic on CUDA)
+
+model:
+  dim: 256
+  n_layers: 3           # 0 -> MF-BPR
+  init_std: 0.1
+
+optim:
+  lr: 1.0e-3
+  decay: 1.0e-4         # L2 on ego embeddings
+  batch_size: 32768
+
+split:                  # validation carved out of train.txt (P0 fix #3)
+  val_frac: 0.1
+  split_seed: 2020      # fixed across run seeds: all arms/seeds share the same val set
+  min_train: 2
+  short_head_frac: 0.2  # top 20% items by train popularity = short head
+
+eval:
+  topks: [10, 20, 50]
+  batch_size: 4096      # users per scoring batch; 12288 was sized for a 40GB A100
+  every: 10             # evaluate every N epochs (also at end of warm-up and last epoch)
+  test_each_eval: true  # log test curve alongside val (never used for selection)
+  select_split: val     # val | test  (test = notebook protocol, invalid for reporting)
+  select_metric: recall@20
+  patience_evals: 0     # 0 = disabled. Early stopping breaks budget matching; leave off for the gate.
+
+warmstart:
+  save: false           # save model+optimizer+RNG at epoch W (to share a prefix across arms)
+  load: null            # path to a warmstart_ep<W>.pt; skips epochs [0, W)
+
+geometry:
+  er_each_eval: true
+  er_max_samples: 10000
+  np_max_samples: 5000
+  np_seed: 42           # fixed subsample across arms -> paired comparison valid
+  np_k: [10, 20]        # NP vs epoch-W ego snapshot
+  np_ref_k: [10, 20]    # NP_ref vs Jaccard item graph (propagated item embeddings)
+
+logging:
+  wandb: false
+  project: gcn-mr-vae
+  entity: null
+
+paths:
+  data: data
+  runs: runs
+  arm_tag: ${armtag:${arm.name},${arm.lambda_manifold},${arm.k_neighbors},${arm.lambda_scale},${arm.warmup_epochs}}
+  run_dir: ${paths.runs}/${dataset.name}/${paths.arm_tag}/seed${seed}
+
+hydra:
+  run:
+    dir: ${paths.run_dir}/.hydra_out
+  sweep:
+    dir: runs/_multirun/${now:%Y%m%d_%H%M%S}
+    subdir: ${dataset.name}_${paths.arm_tag}_seed${seed}
+  job:
+    chdir: false
