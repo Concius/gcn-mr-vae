@@ -79,7 +79,8 @@ def test_mr_off_and_emb_mr_share_warmup(synth, tmp_path):
     for x, y in zip(ha[:2], hb[:2]):
         assert x["phase"] == y["phase"] == "warmup"
         assert x["val_recall@10"] == pytest.approx(y["val_recall@10"], abs=1e-6)
-    assert a["geometry"]["effective_rank_transition"] == pytest.approx(b["geometry"]["effective_rank_transition"], abs=1e-4)
+    for conv in ("er_table_at_ref", "er_prop_at_ref"):
+        assert a["geometry"][conv] == pytest.approx(b["geometry"][conv], abs=1e-4)
 
 
 def test_warmstart_save_then_load(synth, tmp_path):
@@ -98,3 +99,44 @@ def test_selecting_on_test_is_refused_silently_never(synth, tmp_path):
     cfg = _cfg(synth, "baseline", tmp_path, eval={"select_split": "test"})
     res, _ = _run(cfg)
     assert res["selected_on"].startswith("test:")   # allowed only when asked for explicitly
+
+
+def test_w0_captures_initial_reference(synth, tmp_path):
+    """H1 needs NP and ER measured against the random initialisation.
+
+    Regression test: with warmup_epochs=0 the trainer used to skip the
+    reference snapshot entirely, silently dropping np_vs_ref and the ER
+    baseline from every W=0 arm.
+    """
+    cfg = _cfg(synth, "baseline", tmp_path)
+    cfg.arm.warmup_epochs = 0
+    res, _ = _run(cfg)
+    g = res["geometry"]
+    assert g["er_table_at_ref"] is not None and g["er_prop_at_ref"] is not None
+    assert "np_vs_ref@5" in g
+    # a random init table is near-isotropic, so ER_tab at the reference is close to d
+    assert g["er_table_at_ref"] > 0.9 * res["config"]["model"]["dim"]
+    # training moves the neighbourhood structure away from the init
+    assert 0.0 <= g["np_vs_ref@5"] < 1.0
+    assert g["delta_er_table"] == pytest.approx(g["er_table"] - g["er_table_at_ref"], abs=1e-6)
+
+
+def test_both_er_conventions_reported(synth, tmp_path):
+    res, _ = _run(_cfg(synth, "mr_off", tmp_path))
+    g = res["geometry"]
+    for k in ("er_table", "er_prop", "er_table_pct", "er_prop_pct",
+              "delta_er_table", "delta_er_prop"):
+        assert k in g and g[k] is not None
+    # propagation compresses the spectrum further than the table alone
+    assert g["er_prop"] <= g["er_table"] + 1e-6
+    assert g["effective_rank"] == pytest.approx(g["er_prop"])
+
+
+def test_popularity_segmentation_independent_of_val_frac(synth):
+    from src.data.dataset import InteractionDataset
+    a = InteractionDataset("synthetic", root=str(synth), val_frac=0.0, verbose=False)
+    b = InteractionDataset("synthetic", root=str(synth), val_frac=0.2, split_seed=7, verbose=False)
+    assert a.popularity_groups["short_head"] == b.popularity_groups["short_head"]
+    c = InteractionDataset("synthetic", root=str(synth), val_frac=0.2, split_seed=7,
+                           popularity_from="train", verbose=False)
+    assert c.summary()["popularity_from"] == "train"

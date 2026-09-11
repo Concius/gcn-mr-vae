@@ -17,7 +17,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import wilcoxon
 
-GEOM_KEYS = ["effective_rank", "effective_rank_transition", "np_ref@10", "np_ref@20",
+GEOM_KEYS = ["er_table", "er_prop", "er_table_at_ref", "er_prop_at_ref",
+             "delta_er_table", "delta_er_prop", "np_ref@10", "np_ref@20",
              "np_vs_ref@10", "np_vs_ref@20"]
 TEST_KEYS = ["recall@20", "ndcg@20", "precision@10", "recall@10", "ndcg@10",
              "ndcg_short@10", "ndcg_long@10", "gini@20", "tail_share_user@20",
@@ -82,8 +83,8 @@ def paired_wilcoxon(df: pd.DataFrame, arm_a: str, arm_b: str, metric: str = "tes
 
 
 def summary_table(df: pd.DataFrame, metrics=None) -> pd.DataFrame:
-    metrics = metrics or ["test_recall@20", "test_ndcg@20", "effective_rank", "np_ref@20",
-                          "test_gini@20", "test_tail_share_user@20"]
+    metrics = metrics or ["test_recall@20", "test_ndcg@20", "er_table", "er_prop", "np_ref@20",
+                          "test_gini@20", "test_tail_catalog_coverage@20"]
     g = df.groupby(["dataset", "arm_tag"])[metrics]
     return pd.concat({"mean": g.mean(), "std": g.std(), "n": g.size()}, axis=1)
 

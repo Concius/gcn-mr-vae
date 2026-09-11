@@ -115,3 +115,91 @@ audit, (b) removal of Colab/Drive scaffolding, or (c) de-duplication.
   With val selection, coarser evaluation adds selection noise; 10 is cheap on
   Gowalla/Yelp, consider 25 on Amazon-Book.
 - Whether to bump to 10 seeds for the full sweep (Wilcoxon floor at n=5 is p=0.031).
+
+
+---
+
+# Post-port audit (11 Sep 2026)
+
+Re-checked the port against the notebook *and* against the qualification text
+(`Marinho — Arquiteturas Geométricas Variacionais`, 12 Aug 2026 build) to find
+anything that would skew or destroy comparability with the Chapter 5 experiments.
+
+## Numerical equivalence: verified, not assumed
+
+`audit_equivalence.py` reimplements the notebook's `BPRLoss_MR.stageOne` and
+its `Test()` per-user loop verbatim and runs both against the ported code on
+identical inputs and identical weights. Run it with `python audit_equivalence.py`.
+
+**24/24 checks bit-identical**, including:
+
+- total loss and the **full gradient** w.r.t. the embedding tables at
+  λ ∈ {0, 1e-5, 1e-2} — max|difference| = `0.00e+00`;
+- `recall@{10,20}`, `precision@{10,20}` and their short-head/long-tail splits;
+- `gini@{10,20}` and the notebook's tail metric (now `tail_share_user@k`);
+- LightGCN mean-over-layers propagation, and `n_layers=0` reducing to MF-BPR.
+
+The only intended divergence is NDCG. On the audit fixture the fixed IDCG gives
+**NDCG@10 −49.0%** and **NDCG@20 −44.1%** relative to the notebook. Any future
+NDCG number will therefore be far below the notebook's; that is the bug being
+removed, not a regression. This also retroactively justifies dropping NDCG
+from the qualification text.
+
+## Issues found and fixed
+
+**A. `warmup_epochs=0` never captured the initial reference (real bug, H1-critical).**
+The phase-transition branch treated a fresh W=0 run as if it were resumed from
+a warm-start checkpoint, so `_on_transition` never ran: no reference snapshot,
+no `np_vs_ref`, no ER baseline. Since `arm=baseline` is W=0, **every baseline run
+silently omitted the H1 measurements** — and H1 is validated precisely by
+"queda do Effective Rank em relação ao valor medido na inicialização" and
+"preservação de vizinhança … quando a própria inicialização é tomada como
+referência" (§1.2.2). The smoke tests missed it because they overrode
+`warmup_epochs=2` for every arm. Fixed by keying the branch on
+`warmstart.load` instead of comparing `start_epoch` to `W`; regression test
+`test_w0_captures_initial_reference`.
+
+**B. Only one Effective Rank convention was reported (gap).**
+Table 2 reports ER on the **learned embedding table** (ER_tab, ER_init ≈ 255.2
+of d = 256), and Table 3 contrasts ER_tab against ER_prop (post-propagation).
+The port reported only the propagated value, so Chapter 5's headline H1 numbers
+were not reproducible from `results.json`. Both are now computed everywhere
+(`er_table`, `er_prop`, plus `_pct`, `_at_ref` and `delta_` variants);
+`effective_rank` is kept as an alias for `er_prop`. Sanity check: the ported
+`effective_rank` on a random (70839, 256) table returns **255.16**, against the
+paper's 255.2 ± 0.0 — the metric is faithful.
+
+**C. Popularity segmentation depended on `val_frac` (comparability).**
+Computing item popularity on the reduced training set moved **678 items (8.27%
+of the short head)** across the 20/80 boundary on Gowalla, which shifts every
+Gini and tail number away from Chapter 5 for reasons unrelated to the method.
+`split.popularity_from` now defaults to `full_train` (the original `train.txt`,
+Chapter 5's convention), making the segmentation independent of `val_frac`.
+Regression test `test_popularity_segmentation_independent_of_val_frac`.
+
+## Confirmed correct, no change needed
+
+- **Tail-Coverage.** Eq. 2.18 is |I_tail ∩ ∪_u L_u| / |I_tail| — catalog
+  coverage over tail items. That is exactly `tail_catalog_coverage@k`. Use that
+  key in the text; `tail_share_user@k` is the notebook's different quantity,
+  kept only so the old numbers remain reproducible.
+- **Negative sampling.** The notebook's collision loop re-indexes into the
+  previous collided subset after the first pass, so it resamples the wrong
+  positions and leaves a few true positives labelled as negatives: measured at
+  **15 of 810,128 per epoch on Gowalla (0.002%)**. The port leaves 0. The
+  difference is far below seed noise; noted for completeness only.
+- **Sigmoid on scores.** Dropping it cannot change any ranking (monotone), and
+  the equivalence test confirms identical recall.
+- **RNG.** The notebook's `compute_effective_rank` drew an *unseeded*
+  `torch.randperm`, so every ER measurement perturbed the global RNG and the
+  training trajectory depended on how often you evaluated. The port uses local
+  seeded generators for sampling, ER and NP subsampling, so evaluation
+  frequency can no longer affect training. This is why Block 6b's
+  snapshot/restore hack is unnecessary here.
+
+## Still expected to differ from Chapter 5 (by design)
+
+Absolute numbers will move, for reasons already documented above: 90% training
+edges instead of 100%, validation-based selection, equalised budgets, and the
+NDCG fix. Within the new runs all arms share these conditions, so the
+comparisons are valid; only the cross-reference to the old tables shifts.

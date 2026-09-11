@@ -24,6 +24,7 @@ split:                  # validation carved out of train.txt (P0 fix #3)
   split_seed: 2020      # fixed across run seeds: all arms/seeds share the same val set
   min_train: 2
   short_head_frac: 0.2  # top 20% items by train popularity = short head
+  popularity_from: full_train  # full_train (Ch5 convention, val_frac-independent) | train
 
 eval:
   topks: [10, 20, 50]
@@ -40,6 +41,7 @@ warmstart:
 
 geometry:
   er_each_eval: true
+  er_center: true       # mean-centre rows before the SVD (Eq. 3.2)
   er_max_samples: 10000
   np_max_samples: 5000
   np_seed: 42           # fixed subsample across arms -> paired comparison valid

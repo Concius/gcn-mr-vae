@@ -45,13 +45,14 @@ class InteractionDataset:
     def __init__(self, name: str, root: str | os.PathLike = "data",
                  val_frac: float = 0.1, split_seed: int = 2020,
                  min_train: int = 2, short_head_frac: float = 0.2,
-                 verbose: bool = True):
+                 popularity_from: str = "full_train", verbose: bool = True):
         self.name = name
         self.path = Path(root) / name
         self.val_frac = val_frac
         self.split_seed = split_seed
         self.min_train = min_train
         self.short_head_frac = short_head_frac
+        self.popularity_from = popularity_from
 
         full_tr_u, full_tr_i = _read_lightgcn_file(self.path / "train.txt")
         te_u, te_i = _read_lightgcn_file(self.path / "test.txt")
@@ -65,6 +66,7 @@ class InteractionDataset:
             split_seed=split_seed, min_train=min_train)
 
         self.trainUser, self.trainItem = tr_u, tr_i
+        self.fullTrainItem = full_tr_i
         self.valUser, self.valItem = va_u, va_i
         self.testUser, self.testItem = te_u, te_i
         self.n_train_full = len(full_tr_u)
@@ -136,9 +138,16 @@ class InteractionDataset:
     # ------------------------------------------------------------- popularity
     @property
     def popularity_groups(self) -> dict[str, set[int]]:
-        """Top ``short_head_frac`` of items by training interaction count."""
+        """Top ``short_head_frac`` of items by training interaction count.
+
+        ``popularity_from='full_train'`` (default) segments on the original
+        ``train.txt``, matching Chapter 5 and keeping the segmentation
+        independent of ``val_frac``; ``'train'`` uses the reduced training set.
+        Items never seen in training belong to neither group.
+        """
         if self._popularity_groups is None:
-            counts = np.bincount(self.trainItem, minlength=self.n_items)
+            src = self.fullTrainItem if self.popularity_from == "full_train" else self.trainItem
+            counts = np.bincount(src, minlength=self.n_items)
             present = np.flatnonzero(counts > 0)
             order = present[np.argsort(-counts[present], kind="stable")]
             n_short = int(len(order) * self.short_head_frac)
@@ -162,4 +171,5 @@ class InteractionDataset:
             "n_val": int(len(self.valUser)), "n_test": int(len(self.testUser)),
             "val_frac": self.val_frac, "split_seed": self.split_seed,
             "min_train": self.min_train, "short_head_frac": self.short_head_frac,
+            "popularity_from": self.popularity_from,
         }

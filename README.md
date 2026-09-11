@@ -18,6 +18,7 @@ pip install -r requirements.txt
 python -c "import torch; print(torch.cuda.get_device_name(0)); print(torch.randn(2,2,device='cuda')@torch.randn(2,2,device='cuda'))"
 python -m src.data.download            # gowalla, yelp2018, amazon-book -> data/
 python -m pytest tests -q              # ~10 s, CPU
+python audit_equivalence.py            # proves the port matches the notebook numerically
 ```
 
 ## Run
@@ -85,5 +86,6 @@ src/
 analysis/      summarize.py: collect results, paired Wilcoxon (Holm across datasets)
 scripts/       run_gate.sh, run_sweep.sh, run_tests.sh
 tests/         metrics, Laplacian, split, end-to-end smoke on a synthetic dataset
+audit_equivalence.py   reimplements the notebook's loss and Test() loop and diffs them against the port
 notebooks/     plots only
 ```

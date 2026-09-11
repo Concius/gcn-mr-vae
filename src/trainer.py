@@ -113,13 +113,14 @@ class Trainer:
             print("  !! WARNING: selecting checkpoints on TEST. This reproduces the notebook "
                   "protocol and is not valid for reporting.")
 
+        self.resumed = bool(cfg.warmstart.load)
         self.laplacian: torch.Tensor | None = None
         self.ref_ego: torch.Tensor | None = None   # ego snapshot at epoch W
         self.history: list[dict] = []
         self.best = {"score": -1.0, "epoch": -1}
         self.evals_since_best = 0
         self.start_epoch = 0
-        self.er_transition: float | None = None
+        self.er_ref: dict[str, float] = {}   # ER at epoch W, both conventions
 
     # ------------------------------------------------------------- warm-start
     def _warmstart_path(self) -> Path:
@@ -132,6 +133,7 @@ class Trainer:
             "model": self.model.state_dict(),
             "optimizer": self.opt.state_dict(),
             "rng": rng_state_dict(),
+            "er_ref": self.er_ref,
             "sampler_rng": self.sampler_rng.bit_generator.state,
             "ref_ego": self.ref_ego.cpu() if self.ref_ego is not None else None,
             "history": self.history,
@@ -153,6 +155,7 @@ class Trainer:
         rng_state_load(ck["rng"])
         self.sampler_rng.bit_generator.state = ck["sampler_rng"]
         self.ref_ego = ck["ref_ego"].to(self.device) if ck["ref_ego"] is not None else None
+        self.er_ref = ck.get("er_ref", {})
         self.history = list(ck.get("history", []))
         self.start_epoch = self.W
         print(f"  resumed warm-start from {path} at epoch {self.W} (model+optimizer+RNG)")
@@ -179,6 +182,23 @@ class Trainer:
             raise ValueError(self.lap_source)
         self.history_event(epoch, "laplacian_built", source=self.lap_source)
 
+    @torch.no_grad()
+    def _er_pair(self, au=None, ai=None) -> dict:
+        """Effective Rank under both conventions used in the text.
+
+        ``table``: on the learned embedding table (Chapter 5 Table 2, ER_tab).
+        ``prop`` : on the representations after K propagation layers (ER_prop).
+        """
+        g = self.cfg.geometry
+        if au is None:
+            au, ai = self._propagated()
+        return {
+            "er_table": effective_rank(self.model.ego_embeddings(), int(g.er_max_samples),
+                                       center=bool(g.er_center), seed=int(g.np_seed)),
+            "er_prop": effective_rank(torch.cat([au, ai]), int(g.er_max_samples),
+                                      center=bool(g.er_center), seed=int(g.np_seed)),
+        }
+
     def history_event(self, epoch: int, event: str, **kw) -> None:
         self.history.append({"epoch": epoch, "event": event, **kw})
 
@@ -187,13 +207,12 @@ class Trainer:
     def _on_transition(self, epoch: int) -> None:
         """Called once when epoch == W (before training that epoch)."""
         self.ref_ego = self.model.ego_embeddings().detach().clone()
-        au, ai = self._propagated()
-        self.er_transition = effective_rank(torch.cat([au, ai]), int(self.cfg.geometry.er_max_samples),
-                                            seed=int(self.cfg.geometry.np_seed))
-        print(f"\n--- epoch {epoch}: end of warm-up. ER(propagated)={self.er_transition:.2f} "
-              f"({100*self.er_transition/self.model.dim:.1f}% of d). "
+        self.er_ref = self._er_pair()
+        label = "random initialisation" if epoch == 0 else "end of warm-up"
+        print(f"\n--- epoch {epoch}: {label}. ER_tab={self.er_ref['er_table']:.2f} "
+              f"ER_prop={self.er_ref['er_prop']:.2f} (d={self.model.dim}). "
               f"{'MR ON, lambda_eff=%g' % self.lam_eff if self.lam > 0 else 'MR OFF (control)'} ---")
-        self.history_event(epoch, "transition", effective_rank=self.er_transition)
+        self.history_event(epoch, "reference_snapshot", **self.er_ref)
         if bool(self.cfg.warmstart.save):
             self.save_warmstart(epoch)
         self._build_laplacian(epoch)
@@ -236,8 +255,7 @@ class Trainer:
             test = evaluate(self.model, self.ds, "test", self.topks, self.eval_bs, self.device, au, ai)
             rec.update({f"test_{k}": v for k, v in test.items()})
         if bool(self.cfg.geometry.er_each_eval):
-            rec["effective_rank"] = effective_rank(torch.cat([au, ai]), int(self.cfg.geometry.er_max_samples),
-                                                   seed=int(self.cfg.geometry.np_seed))
+            rec.update(self._er_pair(au, ai))
         self.model.train()
         return rec
 
@@ -266,10 +284,12 @@ class Trainer:
         t_start = time.time()
         for epoch in tqdm(range(self.start_epoch, self.E), desc=f"{self.ds.name}/{cfg.arm.name}/s{cfg.seed}",
                           initial=self.start_epoch, total=self.E):
-            if epoch == self.W and self.start_epoch != self.W:
+            if epoch == self.W and not self.resumed:
+                # Fires for every non-resumed arm, including W=0, where the
+                # reference is the random initialisation (H1's NP-vs-init).
                 self._on_transition(epoch)
-            elif epoch == self.W and self.start_epoch == self.W:
-                # resumed exactly at W: reference snapshot came from the checkpoint
+            elif epoch == self.W and self.resumed:
+                # reference snapshot and ER came from the warm-start checkpoint
                 self._build_laplacian(epoch)
                 self.loss.set_active({"bpr", "l2"} | ({"manifold"} if self.lam > 0 else set()))
             elif (self.lam > 0 and self.lap_source == "embeddings" and epoch > self.W
@@ -299,7 +319,8 @@ class Trainer:
                        + f" | val {self.select_metric}={rec.get(f'val_{self.select_metric}', 0):.4f}"
                        + (f" | test {self.select_metric}={rec[f'test_{self.select_metric}']:.4f}"
                           if f"test_{self.select_metric}" in rec else "")
-                       + (f" | ER={rec['effective_rank']:.1f}" if "effective_rank" in rec else "")
+                       + (f" | ER_tab={rec['er_table']:.1f} ER_prop={rec['er_prop']:.1f}"
+                          if "er_table" in rec else "")
                        + (" *" if improved else ""))
                 tqdm.write(msg)
                 if self.wandb is not None:
@@ -323,9 +344,16 @@ class Trainer:
         val = evaluate(self.model, self.ds, "val", self.topks, self.eval_bs, self.device, au, ai)
         test = evaluate(self.model, self.ds, "test", self.topks, self.eval_bs, self.device, au, ai)
 
-        geom = {"effective_rank": effective_rank(torch.cat([au, ai]), int(g.er_max_samples), seed=int(g.np_seed)),
-                "effective_rank_pct": None, "effective_rank_transition": self.er_transition}
-        geom["effective_rank_pct"] = 100.0 * geom["effective_rank"] / self.model.dim
+        geom = dict(self._er_pair(au, ai))
+        geom["er_table_pct"] = 100.0 * geom["er_table"] / self.model.dim
+        geom["er_prop_pct"] = 100.0 * geom["er_prop"] / self.model.dim
+        for conv in ("er_table", "er_prop"):
+            ref = self.er_ref.get(conv)
+            geom[f"{conv}_at_ref"] = ref
+            geom[f"delta_{conv}"] = (geom[conv] - ref) if ref is not None else None
+            geom[f"delta_{conv}_pct"] = (100.0 * (geom[conv] - ref) / ref) if ref else None
+        # kept so older tooling/plots keep working
+        geom["effective_rank"] = geom["er_prop"]
         if self.ref_ego is not None:
             ego = self.model.ego_embeddings()
             for k in list(g.np_k):
@@ -355,7 +383,7 @@ class Trainer:
         nd = m.replace("recall", "ndcg") if m.startswith("recall") else m
         print(f"\n== done: best epoch {ck['epoch']} | val {m}={val.get(m, 0):.4f} | "
               f"test {m}={test.get(m, 0):.4f} {nd}={test.get(nd, 0):.4f} | "
-              f"ER={geom['effective_rank']:.2f} | "
+              f"ER_tab={geom['er_table']:.2f} ER_prop={geom['er_prop']:.2f} | "
               + " ".join(f"{k}={v:.4f}" for k, v in geom.items() if k.startswith("np_ref")))
         if self.wandb is not None:
             self.wandb.summary.update({"best_epoch": ck["epoch"], **{f"final_test_{k}": v for k, v in test.items()},

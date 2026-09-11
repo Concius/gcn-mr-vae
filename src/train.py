@@ -69,7 +69,8 @@ def main(cfg: DictConfig) -> float:
 
     ds = InteractionDataset(cfg.dataset.name, root=hydra.utils.to_absolute_path(str(cfg.paths.data)),
                             val_frac=float(cfg.split.val_frac), split_seed=int(cfg.split.split_seed),
-                            min_train=int(cfg.split.min_train), short_head_frac=float(cfg.split.short_head_frac))
+                            min_train=int(cfg.split.min_train), short_head_frac=float(cfg.split.short_head_frac),
+                            popularity_from=str(cfg.split.popularity_from))
     graph = ds.sparse_graph(device)
     model = LightGCN(ds.n_users, ds.n_items, dim=int(cfg.model.dim), n_layers=int(cfg.model.n_layers),
                      init_std=float(cfg.model.init_std), graph=graph)
