@@ -12,8 +12,10 @@ Differences from the notebook class:
 
 * constructor takes explicit sizes/hyperparameters instead of a global
   ``config`` and a dataset object;
-* ``users_rating`` returns raw dot products. The notebook applied a sigmoid
-  before ranking, which is monotone and therefore never changes any top-k;
+* there is no scoring method on the model. Scoring lives in
+  ``metrics.evaluate.dot_product_scorer`` so that the VAE can replace it
+  without touching the encoder. The notebook applied a sigmoid before
+  ranking, which is monotone and therefore never changed any top-k;
 * the ``keep_prob``/``A_split`` dropout knobs, which were always disabled in
   Chapter 5, were not ported.
 """
@@ -58,12 +60,6 @@ class LightGCN(nn.Module):
             embs.append(all_emb)
         out = torch.stack(embs, dim=1).mean(dim=1)
         return torch.split(out, [self.n_users, self.n_items])
-
-    @torch.no_grad()
-    def users_rating(self, users: torch.Tensor, all_users=None, all_items=None):
-        if all_users is None:
-            all_users, all_items = self.computer()
-        return all_users[users] @ all_items.t()
 
     def state_for_checkpoint(self) -> dict:
         return {"n_users": self.n_users, "n_items": self.n_items,

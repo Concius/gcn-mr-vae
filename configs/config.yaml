@@ -34,6 +34,9 @@ eval:
   select_split: val     # val | test  (test = notebook protocol, invalid for reporting)
   select_metric: recall@20
   patience_evals: 0     # 0 = disabled. Early stopping breaks budget matching; leave off for the gate.
+  select_from_epoch: auto  # auto = warmup_epochs. Excludes the shared prefix from
+                           # checkpoint selection so a standalone control and a
+                           # resumed treatment arm have the same candidate set.
 
 warmstart:
   save: false           # save model+optimizer+RNG at epoch W (to share a prefix across arms)
@@ -56,7 +59,7 @@ logging:
 paths:
   data: data
   runs: runs
-  arm_tag: ${armtag:${arm.name},${arm.lambda_manifold},${arm.k_neighbors},${arm.lambda_scale},${arm.warmup_epochs}}
+  arm_tag: ${armtag:${arm.name},${arm.lambda_manifold},${arm.k_neighbors},${arm.lambda_scale},${arm.warmup_epochs},${arm.rebuild_every},${model.n_layers},${model.dim}}
   run_dir: ${paths.runs}/${dataset.name}/${paths.arm_tag}/seed${seed}
 
 hydra:

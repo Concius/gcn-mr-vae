@@ -203,3 +203,194 @@ Absolute numbers will move, for reasons already documented above: 90% training
 edges instead of 100%, validation-based selection, equalised budgets, and the
 NDCG fix. Within the new runs all arms share these conditions, so the
 comparisons are valid; only the cross-reference to the old tables shifts.
+
+## Scorer seam (11 Sep 2026, prep for Module 3)
+
+`evaluate(model, ...)` became `evaluate(scorer, ...)`. The default
+`dot_product_scorer` reproduces the notebook's `U Iᵀ` exactly (old vs new on
+real Gowalla: 40/40 metrics bit-identical on both splits; notebook harness
+24/24). `LightGCN.users_rating` was removed so there is a single scoring path.
+See `VAE_ROADMAP.md` B1.
+
+## Hyperparameter cross-check (11 Sep 2026)
+
+Every method hyperparameter was diffed against the notebook's `Config` class,
+the MR harness defaults, the Bloco C launch cells, and Tabela 7 of the
+qualification. All match, with one correction applied:
+
+**`coocc_mr.yaml` had lambda = 1e-5; the correct value is 1e-4.** The notebook's
+`run_mr_cooccurrence_experiment` defaulted to `lambda_manifold=0.0001` and
+Tabela 7 records "lambda_manifold (CoOcc-MR) 10^-4, sondagem preliminar",
+against 10^-5 for Emb-MR. The port had silently inherited Emb-MR's value.
+No results were affected (CoOcc-MR has not been re-run), but a CoOcc run
+launched from the config as shipped would not have reproduced Section 5.4.
+
+Four differences remain and are intentional protocol changes, documented in
+`docs/CODEBASE_GUIDE.md` Appendix A.2: evaluation user-batch size (memory
+only), evaluation every 10 epochs throughout, early stopping disabled, and
+validation-based checkpoint selection.
+
+## Fairness audit (11 Sep 2026) — checking for bias against the MR arm
+
+Re-read the design specifically for choices that would systematically
+disadvantage the treatment relative to the control. One real defect found.
+
+**Asymmetric checkpoint-selection window (fixed).** `self.best` was not
+restored by `load_warmstart`, and a resumed arm starts at epoch W. So a
+standalone control running 0→E could select its best checkpoint from *any*
+epoch, including the warm-up prefix, while an MR arm resumed at W could only
+select from [W, E). On the gate (W=1000, E=2000) that is half the candidates.
+It bites whenever validation peaks during warm-up and declines afterwards —
+i.e. exactly the late-stage BPR overfitting regime the gate runs into. The
+control would report its warm-up peak; the MR arm would be forced to report a
+lower post-treatment epoch, and the difference would be read as MR hurting.
+
+Fixed by excluding the shared prefix from selection for **both** arms
+(`eval.select_from_epoch: auto` = W). This is also the more principled rule:
+epochs before W are bit-identical between arms that branch from the same
+warm-start, so a checkpoint drawn from them carries no information about the
+treatment. `results.json` records `select_from_epoch`. Regression test
+`test_selection_window_is_symmetric`.
+
+**Selection-independent reading added.** Every reported number was taken at the
+checkpoint that maximised validation Recall@20. Geometry (ER, NP_ref) and
+diversity (Gini, Tail-Coverage) are not what selection optimises, so reporting
+them only at the accuracy peak can understate an arm whose geometric effect is
+still growing after its accuracy has plateaued. `results.json` now also carries
+`at_last_epoch`: the same metrics at epoch E, a fixed point identical for every
+arm by construction. Use the selected checkpoint for accuracy claims (H2's
+"not inferior") and either — stated explicitly — for geometric and diversity
+claims (H1, H3).
+
+**Checked and found fair, no change:** equal budgets, shared warm-start and
+negative-sampling stream, the same validation split and popularity segmentation
+for all arms, the NDCG fix (applies to both arms), fixed geometry subsampling
+seeds, early stopping disabled (which protects a slow-improving MR arm), and
+both tail definitions reported. `mr_off` selecting its own val peak rather than
+its endpoint is generous to the control, and deliberately so: it is the
+conservative comparison.
+
+**Open item, not a code issue.** λ = 1e-5 was chosen by a sensitivity sweep run
+under the *old* protocol, where MR received extra epochs on a converged,
+test-selected checkpoint. The control has no comparably tuned hyperparameter.
+Re-sweeping λ on the validation set under the corrected protocol
+(`-m arm.lambda_manifold=1e-6,1e-5,1e-4`) is the symmetric thing to do before
+concluding anything from a null result; a λ tuned for the old regime may simply
+be the wrong strength for the new one.
+
+## Second-pass review: is anything here over-engineered? (11 Sep 2026)
+
+Re-read every deviation from the notebook, asking whether it was *needed* or
+merely critical, and whether it costs accuracy. Summary: the code is faithful
+and nothing in it lowers results relative to the notebook beyond removing the
+confound itself. One recommendation (not code) was over-engineered and has been
+simplified.
+
+**Measured, not assumed: the validation split is close to free.** Gowalla,
+seed 2020, d = 64, 25 epochs, same test set, only `val_frac` varied:
+
+| val_frac | train edges | test Recall@20 | vs full |
+|---|---|---|---|
+| 0.00 | 810,128 | 0.09762 | — |
+| 0.05 | 762,857 | 0.09582 | −1.85% |
+| 0.10 | 728,432 | 0.09666 | −0.99% |
+
+Not monotone in the data removed, so the spread is noise rather than signal.
+The drop against Chapter 5's published numbers comes from removing the extra
+1,000 epochs the MR arm received, which is the artefact being corrected.
+
+**Simplified: the gate is W = 100, E = 1000, one command.** The earlier
+recommendation of W = 1000 / E = 2000 was chosen to preserve the notebook's
+*realised* condition (MR acting on a converged model) — but that condition was
+itself produced by the budget bug. Tabela 7 and §4.2.1 specify activation at
+epoch 100 with a 1,000-epoch horizon; that is the design of record and the
+corrected re-run should use it. Halves the compute (≈5 h instead of ≈7.3 h for
+five seeds) and removes the warm-start dance entirely: with the same seed both
+arms share initialisation and the negative-sampling stream, and epochs 0–99 are
+BPR-only for both, so the warm-up is bit-identical by construction — verified
+on real Gowalla data, not assumed. `scripts/run_gate_converged.sh` keeps the
+W = 1000 variant as an optional follow-up if the primary gate is null.
+
+**Classification of every change.**
+
+*Necessary — the comparison is invalid or a number is wrong without it:*
+budget equalisation; the `mr_off` control; validation-based selection;
+the NDCG IDCG fix; W = 0 reference capture; the symmetric selection window.
+
+*Free and additive — new columns, no behavioural change:* both tail
+definitions; both ER conventions; `popularity_from=full_train` (which
+*prevents* a change); `at_last_epoch`; NP reference consistency.
+
+*Explicit but inert — the default reproduces the notebook exactly:*
+`lambda_scale=none`; `er_center=true`; `knn_backend` (torch and sklearn agree
+on >99% of neighbours).
+
+*Verified faithful:* loss and full gradient bit-identical; all ranking and
+diversity metrics bit-identical; propagation identical; `effective_rank` on a
+random table returns 255.16 against the text's 255.2.
+
+Nothing in the list makes the method look worse than it is. The measured cost
+of the entire corrected protocol, on the primary accuracy metric, is within
+noise.
+
+## Third pass: full line-by-line comb (11 Sep 2026)
+
+Read every module line by line, verified config-to-code wiring in both
+directions, simulated the evaluation schedule across edge cases, and re-tested
+each earlier finding for false alarms. Four real defects found and fixed; one
+earlier concern confirmed as a false alarm.
+
+**1. Sweep runs silently overwrote each other (real, high impact).**
+`paths.arm_tag` encoded only name, W, lambda, k and lambda_scale. So
+`-m model.n_layers=2,3,4,5` — the K-depth sweep recommended in both the README
+and the guide — produced the tag `baseline_w0` four times and every run wrote
+to the same directory, each replacing the last. The same held for
+`arm.rebuild_every` (a committed ablation in §4.2.3) and `model.dim`. Fixed by
+adding rebuild period, depth and dimension to the tag
+(`emb_mr_w100_lam1e-05_k20_r50_K3_d256`), and by adding `_assert_no_clobber`,
+which refuses to start if the run directory already holds a *different*
+configuration and prints the differing keys. Re-running an identical config is
+still allowed. The guard ignores `paths`, `hydra`, `warmstart`, `logging`,
+`device` and `deterministic`, none of which change what the experiment is.
+
+**2. Warm-start resume would have crashed on GPU (real, GPU-only).**
+`torch.load(map_location=device)` moves *every* tensor in a checkpoint to that
+device, including the saved RNG ByteTensors — and `torch.set_rng_state` accepts
+only a CPU ByteTensor ("This function only works for CPU", per its docstring).
+CPU tests could never catch it. `rng_state_load` now coerces states back to CPU;
+two regression tests cover the round trip. This would have surfaced only when
+running `run_gate_converged.sh` on the RTX 5060 Ti.
+
+**3. Adjacency cache key omitted `min_train`.** Changing `split.min_train`
+changes which edges are held out but would have reused a stale cached graph.
+Now in the key.
+
+**4. Dead imports** (`defaultdict`, `Timer`) removed; the in-place masking of
+the scorer's return value is now documented, since Module 3 must return a
+freshly allocated tensor.
+
+**False alarm, corrected.** While reading `evaluate.py` I suspected that
+`n_rel` (counting COO entries) and the short/long-head counts (summing matrix
+values) would disagree if a dataset contained duplicate `(user, item)` pairs,
+since SciPy sums duplicates. Checked directly: Gowalla and Yelp2018 contain
+**zero** duplicates in both train and test, all stored values are exactly 1.0,
+and `n_rel == n_short + n_long` holds exactly on the real test set. Not a bug.
+A one-line binarisation was added anyway so the property is guaranteed for any
+future dataset.
+
+**Re-verified, all confirmed real (no false alarms):** the W=0 reference bug
+(demonstrated on Gowalla, `er_table_at_ref` was absent); the ER-convention gap
+against Table 2; the popularity-segmentation drift (678 items); the CoOcc
+lambda — cell 19 sets `LAMBDA_MANIFOLD = 1e-4` explicitly while the fifteen
+Bloco C cells use `LAMBDA = 1e-05`, matching Tabela 7; and the selection-window
+asymmetry.
+
+**Checks that came back clean.** Every config key is read by the code and every
+key the code reads exists in the config (verified programmatically, both
+directions). All seventeen modules import. `vae.py` raises as intended. The
+evaluation schedule yields at least one selectable checkpoint under the gate
+config and seven edge cases including `W == E` and `eval.every > epochs`.
+Loss and gradient still bit-identical to the notebook (24/24). Two arms stay
+bit-identical through warm-up on real Gowalla without any warm-start file.
+The full CLI path — multirun, distinct folders, `results.json`,
+`analysis.summarize` — runs end to end on Gowalla.

@@ -1,6 +1,23 @@
 """Full-ranking evaluation on the validation or test split (ported from
 Cell 6 ``Test``).
 
+Scoring is delegated to a ``Scorer``: a callable that maps a batch of user
+ids (``LongTensor`` on ``device``) to a dense ``(batch, n_items)`` float score
+matrix on the same device. ``evaluate`` never touches the model; the caller
+decides how R̂ is produced:
+
+* LightGCN / MF-BPR: ``dot_product_scorer(all_users, all_items)`` over
+  propagated embeddings, computed once by the caller.
+* VAE (Module 3): a closure around ``decoder(mu_u)`` — score with the
+  posterior *mean*, not a sample, at evaluation time (Liang et al. 2018).
+* VAE-CF baseline: a closure that pulls ``r_u`` rows from ``dataset.UserItemNet``.
+
+Exclusion of known positives stays here, because it is protocol, not model.
+Note that ``evaluate`` masks known positives **in place** on the tensor the
+scorer returns, so a scorer must hand back a freshly allocated tensor, never a
+cached or shared one (``dot_product_scorer`` returns a matmul result, which is
+fresh).
+
 Protocol:
 
 * scores are computed for every item, then the user's *known positives* are
@@ -19,6 +36,8 @@ Protocol:
 """
 from __future__ import annotations
 
+from typing import Callable
+
 import numpy as np
 import scipy.sparse as sp
 import torch
@@ -27,15 +46,24 @@ from .diversity import DiversityAccumulator
 from .ranking import ndcg_at_k, precision_at_k, recall_at_k
 
 
+Scorer = Callable[[torch.Tensor], torch.Tensor]
+
+
+def dot_product_scorer(all_users: torch.Tensor, all_items: torch.Tensor) -> Scorer:
+    """R̂ = U Iᵀ over (propagated) embeddings. The notebook's scoring rule."""
+    def score(users: torch.Tensor) -> torch.Tensor:
+        return all_users[users] @ all_items.t()
+    return score
+
+
 def _exclusion_from_csr(csr: sp.csr_matrix, batch_users: np.ndarray):
     sub = csr[batch_users].tocoo()
     return sub.row, sub.col
 
 
 @torch.no_grad()
-def evaluate(model, dataset, split: str = "val", topks=(10, 20, 50),
-             batch_size: int = 4096, device: torch.device | None = None,
-             all_users=None, all_items=None) -> dict[str, float]:
+def evaluate(scorer: Scorer, dataset, split: str = "val", topks=(10, 20, 50),
+             batch_size: int = 4096, device: torch.device = torch.device("cpu")) -> dict[str, float]:
     if split == "val":
         gt_csr, gt_dict = dataset.ValNet, dataset.valDict
         exclude = [dataset.UserItemNet]
@@ -47,7 +75,6 @@ def evaluate(model, dataset, split: str = "val", topks=(10, 20, 50),
     if not gt_dict:
         return {}
 
-    device = device or next(model.parameters()).device
     topks = list(topks)
     max_k = max(topks)
     users = np.array(sorted(gt_dict.keys()), dtype=np.int64)
@@ -64,13 +91,11 @@ def evaluate(model, dataset, split: str = "val", topks=(10, 20, 50),
     n_users = {"": 0, "_short": 0, "_long": 0}
     div = DiversityAccumulator(dataset.n_items, topks, long_mask)
 
-    model.eval()
-    if all_users is None:
-        all_users, all_items = model.computer()
-
     for s in range(0, len(users), batch_size):
         bu = users[s:s + batch_size]
-        rating = all_users[torch.from_numpy(bu).to(device)] @ all_items.t()
+        rating = scorer(torch.from_numpy(bu).to(device))
+        if rating.shape != (len(bu), dataset.n_items):
+            raise ValueError(f"scorer returned {tuple(rating.shape)}, expected {(len(bu), dataset.n_items)}")
         for csr in exclude:
             r, c = _exclusion_from_csr(csr, bu)
             if len(r):

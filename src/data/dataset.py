@@ -15,7 +15,7 @@ Chapter 5 uses it.
 from __future__ import annotations
 
 import os
-from collections import defaultdict
+
 from pathlib import Path
 
 import numpy as np
@@ -81,6 +81,14 @@ class InteractionDataset:
             (np.ones(len(te_u), dtype=np.float32), (te_u, te_i)),
             shape=(self.n_users, self.n_items))
 
+        # Binarise. scipy SUMS duplicate (u, i) pairs, which would make a
+        # repeated interaction count as 2 in the value-based short/long-head
+        # counts while the entry-based n_rel counts it once. The three shipped
+        # datasets contain no duplicates (checked), but a future dataset might.
+        for M in (self.UserItemNet, self.ValNet, self.TestNet):
+            if M.nnz:
+                M.data[:] = 1.0
+
         self.valDict = to_dict(va_u, va_i)
         self.testDict = to_dict(te_u, te_i)
 
@@ -107,7 +115,9 @@ class InteractionDataset:
 
     # ------------------------------------------------------------------ graph
     def _adj_cache_path(self) -> Path:
-        tag = f"val{self.val_frac:g}_s{self.split_seed}" if self.val_frac > 0 else "full"
+        # min_train changes which edges are held out, so it belongs in the key
+        tag = (f"val{self.val_frac:g}_s{self.split_seed}_m{self.min_train}"
+               if self.val_frac > 0 else "full")
         return self.path / f"norm_adj_{tag}.npz"
 
     def normalized_adjacency(self) -> sp.csr_matrix:

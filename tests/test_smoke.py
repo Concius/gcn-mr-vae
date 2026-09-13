@@ -140,3 +140,42 @@ def test_popularity_segmentation_independent_of_val_frac(synth):
     c = InteractionDataset("synthetic", root=str(synth), val_frac=0.2, split_seed=7,
                            popularity_from="train", verbose=False)
     assert c.summary()["popularity_from"] == "train"
+
+
+def test_selection_window_is_symmetric(synth, tmp_path):
+    """A standalone control and a resumed treatment arm must have the SAME set
+    of eligible checkpoints. Regression: `best` was not restored on resume, so
+    a standalone arm could select from the shared warm-up prefix while a
+    resumed arm could not — strictly more candidates for the control.
+    """
+    import json
+    ca = _cfg(synth, "mr_off", tmp_path / "a")
+    ca.eval.every = 1
+    ca.warmstart.save = True
+    a, _ = _run(ca)
+    ws = Path(ca.paths.run_dir) / "warmstart_ep2.pt"
+    cb = _cfg(synth, "emb_mr", tmp_path / "b")
+    cb.eval.every = 1
+    cb.warmstart.load = str(ws)
+    b, _ = _run(cb)
+    W = int(ca.arm.warmup_epochs)
+    # neither arm may select a checkpoint from the shared prefix
+    assert a["best_epoch"] > W and b["best_epoch"] > W
+    assert a["select_from_epoch"] == b["select_from_epoch"] == W
+
+
+def test_last_epoch_reading_is_reported(synth, tmp_path):
+    """Geometry/diversity are not what selection optimises, so a fixed-epoch
+    reading must also be available."""
+    res, _ = _run(_cfg(synth, "emb_mr", tmp_path))
+    al = res["at_last_epoch"]
+    assert al["epoch"] == res["epochs_budget"]
+    assert "er_table" in al and "er_prop" in al
+    assert any(k.startswith("test_") for k in al) and any(k.startswith("val_") for k in al)
+
+
+def test_baseline_w0_selects_from_all_epochs(synth, tmp_path):
+    cfg = _cfg(synth, "baseline", tmp_path)
+    cfg.arm.warmup_epochs = 0
+    res, _ = _run(cfg)
+    assert res["select_from_epoch"] == 0

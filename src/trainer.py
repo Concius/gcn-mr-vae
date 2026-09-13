@@ -50,12 +50,12 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 
-from .metrics.evaluate import evaluate
+from .metrics.evaluate import dot_product_scorer, evaluate
 from .metrics.geometry import effective_rank, neighborhood_preservation, np_ref
 from .models.losses import BPRTerm, BatchContext, CompositeLoss, L2EgoTerm, ManifoldTerm
 from .models.mr_layer import build_cooccurrence_laplacian, build_embedding_laplacian
 from .sampling import minibatch, n_batches, uniform_sample
-from .utils import Timer, count_params, json_dump, rng_state_dict, rng_state_load
+from .utils import count_params, json_dump, rng_state_dict, rng_state_load
 
 
 class Trainer:
@@ -105,6 +105,17 @@ class Trainer:
         self.select_split = str(ev.select_split)
         self.select_metric = str(ev.select_metric)
         self.patience = int(ev.patience_evals)
+        # Checkpoint selection window. Epochs [0, W) are the shared prefix: for a
+        # control and a treatment arm branching from the same warm-start they are
+        # bit-identical there, so a checkpoint from the prefix says nothing about
+        # the treatment. A *resumed* arm cannot select from the prefix at all
+        # (it never trained those epochs), so allowing a standalone arm to do so
+        # would give the control strictly more candidates than the treatment.
+        # Both therefore select only from post-treatment epochs.
+        sf = ev.get("select_from_epoch", "auto")
+        self.select_from = self.W if str(sf) == "auto" else int(sf)
+        if self.W >= self.E:          # degenerate: no treatment phase at all
+            self.select_from = 0
         if self.select_split == "val" and not dataset.valDict:
             raise ValueError("eval.select_split=val but the dataset has no validation split "
                              "(split.val_frac=0). Use split.val_frac>0, or set "
@@ -244,15 +255,24 @@ class Trainer:
         return {k_: v / n for k_, v in acc.items()}
 
     # ------------------------------------------------------------ evaluation
+    def scorer(self, all_users: torch.Tensor, all_items: torch.Tensor):
+        """How R̂ is produced at evaluation time. Modules 1 and 2 score by dot
+        product over propagated embeddings. Module 3 overrides this to score
+        through the VAE decoder (``decoder(mu_u)``); nothing else in the
+        evaluation path changes.
+        """
+        return dot_product_scorer(all_users, all_items)
+
     @torch.no_grad()
     def evaluate_point(self, epoch: int, phase: str, losses: dict) -> dict:
         self.model.eval()
         au, ai = self.model.computer()
         rec = {"epoch": epoch + 1, "phase": phase, "event": "eval", **{f"loss_{k}": v for k, v in losses.items()}}
-        val = evaluate(self.model, self.ds, "val", self.topks, self.eval_bs, self.device, au, ai)
+        scorer = self.scorer(au, ai)
+        val = evaluate(scorer, self.ds, "val", self.topks, self.eval_bs, self.device)
         rec.update({f"val_{k}": v for k, v in val.items()})
         if self.test_each_eval:
-            test = evaluate(self.model, self.ds, "test", self.topks, self.eval_bs, self.device, au, ai)
+            test = evaluate(scorer, self.ds, "test", self.topks, self.eval_bs, self.device)
             rec.update({f"test_{k}": v for k, v in test.items()})
         if bool(self.cfg.geometry.er_each_eval):
             rec.update(self._er_pair(au, ai))
@@ -307,12 +327,13 @@ class Trainer:
                 self.history.append(rec)
                 json_dump(self.history, self.run_dir / "history.json")
                 score = self._selection_score(rec)
-                improved = score > self.best["score"]
+                eligible = epoch >= self.select_from
+                improved = eligible and score > self.best["score"]
                 if improved:
                     self.best = {"score": score, "epoch": epoch + 1}
                     self.evals_since_best = 0
                     self.save_best(epoch, rec)
-                else:
+                elif eligible:
                     self.evals_since_best += 1
                 msg = (f"ep {epoch+1:4d} [{phase:6s}] loss={losses.get('total', 0):.4f}"
                        + (f" mani={losses['manifold']:.3e}" if "manifold" in losses else "")
@@ -321,7 +342,7 @@ class Trainer:
                           if f"test_{self.select_metric}" in rec else "")
                        + (f" | ER_tab={rec['er_table']:.1f} ER_prop={rec['er_prop']:.1f}"
                           if "er_table" in rec else "")
-                       + (" *" if improved else ""))
+                       + (" *" if improved else ("" if eligible else " (prefix)")))
                 tqdm.write(msg)
                 if self.wandb is not None:
                     self.wandb.log(rec, step=epoch + 1)
@@ -336,13 +357,18 @@ class Trainer:
 
     @torch.no_grad()
     def finalize(self, train_seconds: float) -> dict:
+        if not (self.run_dir / "best.pt").exists():
+            raise RuntimeError(
+                f"no checkpoint was selected: no evaluation ran at or after epoch "
+                f"{self.select_from}. Check eval.every against epochs/warmup_epochs.")
         ck = torch.load(self.run_dir / "best.pt", map_location=self.device, weights_only=False)
         self.model.load_state_dict(ck["model"])
         self.model.eval()
         au, ai = self.model.computer()
         g = self.cfg.geometry
-        val = evaluate(self.model, self.ds, "val", self.topks, self.eval_bs, self.device, au, ai)
-        test = evaluate(self.model, self.ds, "test", self.topks, self.eval_bs, self.device, au, ai)
+        scorer = self.scorer(au, ai)
+        val = evaluate(scorer, self.ds, "val", self.topks, self.eval_bs, self.device)
+        test = evaluate(scorer, self.ds, "test", self.topks, self.eval_bs, self.device)
 
         geom = dict(self._er_pair(au, ai))
         geom["er_table_pct"] = 100.0 * geom["er_table"] / self.model.dim
@@ -364,6 +390,18 @@ class Trainer:
             geom[f"np_ref@{k}"] = np_ref(ai, self.ds.UserItemNet, k=int(k), max_samples=int(g.np_max_samples),
                                          seed=int(g.np_seed), backend=self.knn_backend)
 
+        # A second, selection-independent reading. Every metric above is taken at
+        # the checkpoint that maximised val recall; geometry and diversity are not
+        # what selection optimised, so reporting them only there can understate an
+        # arm whose geometric effect keeps growing after its accuracy peak. The
+        # last-epoch record gives the same quantities at the final evaluation,
+        # which is epoch E for every arm under matched budgets (only early
+        # stopping, off by default, can make it earlier -- the epoch is stored).
+        evals = [r for r in self.history if r.get("event") == "eval"]
+        last = evals[-1] if evals else {}
+        at_last = {k: v for k, v in last.items()
+                   if k.startswith(("val_", "test_", "er_")) or k == "epoch"}
+
         result = {
             "dataset": self.ds.name, "arm": str(self.cfg.arm.name),
             "arm_tag": str(self.cfg.paths.get("arm_tag", self.cfg.arm.name)), "seed": int(self.cfg.seed),
@@ -371,7 +409,8 @@ class Trainer:
             "epochs_budget": self.E, "warmup_epochs": self.W,
             "lambda_manifold": self.lam, "lambda_effective": self.lam_eff,
             "n_batches_per_epoch": self.nb,
-            "val": val, "test": test, "geometry": geom,
+            "val": val, "test": test, "geometry": geom, "at_last_epoch": at_last,
+            "select_from_epoch": self.select_from,
             "train_seconds": train_seconds,
             "dataset_summary": self.ds.summary(),
             "config": OmegaConf.to_container(self.cfg, resolve=True),

@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
-# The September gate (Aug 2 plan): Gowalla, budget-matched, validation-selected.
-# Two arms that differ in exactly one config value (arm.lambda_manifold):
+# The corrected gate: the protocol Tabela 7 actually specifies (W=100, E=1000),
+# with the budget confound removed. Two arms differing in ONE config value.
+#
 #   mr_off : 100 BPR epochs, then 900 BPR epochs   (control)
 #   emb_mr : 100 BPR epochs, then 900 BPR+MR epochs
+#
+# No warm-start files are needed. With the same seed both arms have the same
+# initialisation and the same negative-sampling stream, and epochs 0-99 are
+# BPR-only for both, so the warm-up is bit-identical by construction. This is
+# verified on real data by tests/test_smoke.py::test_mr_off_and_emb_mr_share_warmup.
+#
+# ~25 min (mr_off) + ~37 min (emb_mr) per seed on an RTX 5060 Ti => ~5 h for 5 seeds.
 # Run inside tmux:  tmux new -s gate; bash scripts/run_gate.sh; Ctrl-b d
 set -euo pipefail
 cd "$(dirname "$0")/.."

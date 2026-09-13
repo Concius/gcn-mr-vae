@@ -85,8 +85,11 @@ def paired_wilcoxon(df: pd.DataFrame, arm_a: str, arm_b: str, metric: str = "tes
 def summary_table(df: pd.DataFrame, metrics=None) -> pd.DataFrame:
     metrics = metrics or ["test_recall@20", "test_ndcg@20", "er_table", "er_prop", "np_ref@20",
                           "test_gini@20", "test_tail_catalog_coverage@20"]
-    g = df.groupby(["dataset", "arm_tag"])[metrics]
-    return pd.concat({"mean": g.mean(), "std": g.std(), "n": g.size()}, axis=1)
+    grp = df.groupby(["dataset", "arm_tag"])
+    g = grp[metrics]
+    out = pd.concat({"mean": g.mean(), "std": g.std()}, axis=1)
+    out[("n", "seeds")] = grp.size()
+    return out
 
 
 def main(argv=None):

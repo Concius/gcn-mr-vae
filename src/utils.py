@@ -100,8 +100,26 @@ def rng_state_dict() -> dict:
 
 
 def rng_state_load(state: dict) -> None:
-    random.setstate(state["python"])
+    """Restore RNG state saved by :func:`rng_state_dict`.
+
+    The tensors are forced back to CPU first. ``torch.load(map_location=cuda)``
+    moves *every* tensor in a checkpoint to the GPU, including these ByteTensor
+    RNG states, and ``torch.set_rng_state`` only accepts a CPU ByteTensor — so
+    resuming a warm-start on a GPU would otherwise raise here even though the
+    same code path is fine on CPU.
+    """
+    def _cpu(t):
+        return t.cpu() if torch.is_tensor(t) else t
+
+    random.setstate(_tuplify(state["python"]))
     np.random.set_state(state["numpy"])
-    torch.set_rng_state(state["torch"])
+    torch.set_rng_state(_cpu(state["torch"]).to(torch.uint8))
     if "cuda" in state and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(state["cuda"])
+        torch.cuda.set_rng_state_all([_cpu(t).to(torch.uint8) for t in state["cuda"]])
+
+
+def _tuplify(obj):
+    """``random.setstate`` needs tuples; JSON/torch round-trips can give lists."""
+    if isinstance(obj, list):
+        return tuple(_tuplify(o) for o in obj)
+    return obj

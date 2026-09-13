@@ -1,8 +1,13 @@
 # @package arm
 # CoOcc-MR (Sec. 5.3.2): fixed block-diagonal Laplacian from the interaction matrix R.
+# NOTE: lambda is 1e-4 here, NOT the 1e-5 used by Emb-MR. That is what the
+# notebook's harness defaulted to and what Tabela 7 of the qualification
+# records ("lambda_manifold (CoOcc-MR) 10^-4, sondagem preliminar"). Do not
+# harmonise it with emb_mr without re-running: the two variants were probed
+# at different strengths.
 name: coocc_mr
 warmup_epochs: 100
-lambda_manifold: 1.0e-5
+lambda_manifold: 1.0e-4
 laplacian: cooccurrence
 k_neighbors: 20
 rebuild_every: 0

@@ -15,7 +15,7 @@ from src.data.synthetic import make_synthetic
 from src.models.lightgcn import LightGCN
 from src.models.losses import BPRTerm, BatchContext, CompositeLoss, L2EgoTerm, ManifoldTerm
 from src.models.mr_layer import build_embedding_laplacian, manifold_loss
-from src.metrics.evaluate import evaluate
+from src.metrics.evaluate import dot_product_scorer, evaluate
 from src.metrics.diversity import gini_from_counts
 from src.utils import set_seed
 
@@ -156,7 +156,8 @@ for lam in [0.0, 1e-5, 1e-2]:
 
 print("\n2. EVALUATION EQUIVALENCE (notebook Test vs ported evaluate)")
 nb = nb_test(ds, model, topks)
-port = evaluate(model, ds, "test", topks, batch_size=4096, device=DEV)
+au_, ai_ = model.computer()
+port = evaluate(dot_product_scorer(au_, ai_), ds, "test", topks, batch_size=4096, device=DEV)
 for ki, k in enumerate(topks):
     for m in ["recall", "precision", "recall_short", "precision_short", "recall_long", "precision_long"]:
         check(f"{m}@{k}", abs(nb[m][ki] - port[f"{m}@{k}"]) < 1e-9,

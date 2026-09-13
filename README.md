@@ -4,7 +4,12 @@ LightGCN + Manifold Regularisation (+ VAE, in progress) for collaborative
 filtering. Code for the MSc dissertation *GCN-MR-VAE* (UNESP / FAPESP
 2025/07727-0). Ported from the Colab notebook `LightGCN_Manifold_refactored`
 with the protocol fixes from the June/August 2026 code audits applied. See
-[`MIGRATION.md`](MIGRATION.md) for the cell-by-cell map and the fix log.
+[`MIGRATION.md`](MIGRATION.md) for the cell-by-cell map and the fix log, and
+[`VAE_ROADMAP.md`](VAE_ROADMAP.md) for the Module 3 readiness assessment and
+the Nov 2026 – Jan 2027 build plan. **Start with
+[`docs/CODEBASE_GUIDE.md`](docs/CODEBASE_GUIDE.md)** — the complete guide to the
+science, the code, the protocol, and the migration, written for both
+non-programmers and maintainers.
 
 ## Install (local, RTX 5060 Ti / Pop!_OS)
 
@@ -27,8 +32,10 @@ python audit_equivalence.py            # proves the port matches the notebook nu
 # one run
 python -m src.train dataset=gowalla arm=emb_mr seed=2020
 
-# the September gate: control vs MR, 5 seeds, budget-matched, val-selected
+# the gate: control vs MR, W=100/E=1000 (Tabela 7), 5 seeds, budget-matched
 bash scripts/run_gate.sh               # or: SEEDS=2020,2021 bash scripts/run_gate.sh
+# equivalently, and it really is this simple:
+python -m src.train -m dataset=gowalla arm=mr_off,emb_mr seed=2020,2021,2022,2023,2024
 
 # anything is overridable from the command line
 python -m src.train dataset=yelp2018 arm=emb_mr seed=2021 arm.lambda_manifold=1e-4 arm.k_neighbors=10
