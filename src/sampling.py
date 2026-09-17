@@ -6,6 +6,15 @@ one of the user's training positives. The collision check is done with a
 single CSR lookup instead of a Python loop over every pair; on Amazon-Book
 (~2.4M pairs per epoch) that loop was a noticeable share of epoch time.
 
+Held-out items: collisions are checked against the *reduced* training matrix,
+so an item moved into the validation split can be drawn as a negative for its
+own user. This is deliberate. Excluding validation items would require the
+sampler to consult held-out labels, which leaks them into training; standard
+practice is to exclude only training positives. The effect is tiny and
+identical for every arm (on Gowalla a user has ~3 validation items out of
+40,981, so under 0.01% of draws), and it applies to the control and the
+treatment alike.
+
 RNG hygiene: sampling uses its own ``numpy.random.Generator`` seeded from the
 run seed. Evaluation and geometric metrics use separate generators, so
 evaluating more or less often never changes the negative-sampling stream.

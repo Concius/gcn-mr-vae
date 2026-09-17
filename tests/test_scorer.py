@@ -46,33 +46,64 @@ def _planted_scorer(ds, val_score=10.0, train_score=20.0):
 
 
 def test_evaluate_honours_custom_scorer_and_excludes_train(setup):
+    """A custom scorer is used, and train positives are masked on the val split.
+
+    Scores train items above val items. With masking, rank 1 is a val item for
+    every user, so recall@1 = 1/|val(u)|; without masking a train item takes
+    rank 1 and recall@1 collapses to 0. Asserted at k=1 for the same reason as
+    the test below: at larger k the val items still fit in the list either way
+    and the check would not discriminate.
+    """
     ds, dev, au, ai = setup
-    k = 50  # larger than any user's val count on this fixture
-    res = evaluate(_planted_scorer(ds), ds, "val", [k], batch_size=32, device=dev)
-    # every val positive is retrievable once train is masked -> perfect recall
-    assert res[f"recall@{k}"] == pytest.approx(1.0)
-    # and it must differ from model-based scoring, proving the scorer was used
-    ref = evaluate(dot_product_scorer(au, ai), ds, "val", [k], batch_size=32, device=dev)
-    assert ref[f"recall@{k}"] < 1.0
+
+    def score(users):
+        u = users.cpu().numpy()
+        out = torch.zeros(len(u), ds.n_items)
+        va = ds.ValNet[u].tocoo()
+        out[torch.from_numpy(va.row), torch.from_numpy(va.col)] = 0.5
+        tr = ds.UserItemNet[u].tocoo()
+        out[torch.from_numpy(tr.row), torch.from_numpy(tr.col)] = 1.0
+        return out
+
+    res = evaluate(score, ds, "val", [1], batch_size=32, device=dev)
+    users = sorted(ds.valDict)
+    expected = sum(1.0 / len(ds.valDict[u]) for u in users) / len(users)
+    assert res["recall@1"] == pytest.approx(expected, abs=1e-9)
+
+    # and the scorer really was consulted (model-based scoring differs)
+    ref = evaluate(dot_product_scorer(au, ai), ds, "val", [1], batch_size=32, device=dev)
+    assert ref["recall@1"] != pytest.approx(expected, abs=1e-9)
 
 
 def test_test_split_excludes_val_positives(setup):
-    """On the test split, val positives are known and must be masked too."""
+    """Val positives are known at test time and must be masked.
+
+    Scores val items above test items above everything else, and reads
+    recall@1. With masking, rank 1 is a test item for every user, so
+    recall@1 = 1/|test(u)|. Without masking, rank 1 is a *val* item for every
+    user that has one, so their recall@1 is 0. k must be small enough that the
+    val items actually displace test items -- at k=10 on this fixture every
+    test item still fits in the list either way and the check is vacuous,
+    which is why this asserts at k=1.
+    """
     ds, dev, au, ai = setup
-    # score val items highest; if they were NOT excluded they would fill top-k
-    # and crowd out test items, giving recall 0 for users whose val count >= k
-    sc = _planted_scorer(ds, val_score=20.0, train_score=10.0)
-    res = evaluate(sc, ds, "test", [5], batch_size=32, device=dev)
-    # test items score 0 (tied); with val+train masked, top-5 comes from the
-    # remaining pool, so recall is > 0 for at least some users
-    assert res["recall@5"] >= 0.0
-    # stronger: compare against a scorer that boosts TEST items -> recall 1
-    def boost_test(users):
-        u = users.cpu().numpy(); out = torch.zeros(len(u), ds.n_items)
+
+    def score(users):
+        u = users.cpu().numpy()
+        out = torch.zeros(len(u), ds.n_items)
         te = ds.TestNet[u].tocoo()
-        out[torch.from_numpy(te.row), torch.from_numpy(te.col)] = 1.0
+        out[torch.from_numpy(te.row), torch.from_numpy(te.col)] = 0.5
+        va = ds.ValNet[u].tocoo()
+        out[torch.from_numpy(va.row), torch.from_numpy(va.col)] = 1.0
         return out
-    assert evaluate(boost_test, ds, "test", [50], batch_size=32, device=dev)["recall@50"] == pytest.approx(1.0)
+
+    users = sorted(ds.testDict)
+    with_val = [u for u in users if ds.valDict.get(u)]
+    assert len(with_val) > 0.5 * len(users), "fixture must exercise the masking"
+
+    res = evaluate(score, ds, "test", [1], batch_size=32, device=dev)
+    expected = sum(1.0 / len(ds.testDict[u]) for u in users) / len(users)
+    assert res["recall@1"] == pytest.approx(expected, abs=1e-9)
 
 
 def test_scorer_shape_is_validated(setup):

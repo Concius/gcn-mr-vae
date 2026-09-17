@@ -26,10 +26,12 @@ Protocol:
   validation items at test time would let known positives occupy top-k slots
   and depress every arm's test numbers by the same amount, which is noise,
   not signal;
-* propagation (``model.computer()``) runs once per evaluation, not once per
-  batch as in the notebook (``getUsersRating`` re-propagated every call);
-* per-user loops are replaced by CSR fancy-indexing into a hit matrix. Same
-  numbers, minutes faster on Amazon-Book;
+* the caller propagates once per evaluation and passes the result in through
+  the scorer, rather than re-propagating per batch as the notebook's
+  ``getUsersRating`` did;
+* the notebook's per-user Python loop is replaced by an integer-key
+  ``np.isin`` against the ground-truth pairs, giving the hit matrix in one
+  vectorised step. Same numbers, minutes faster on Amazon-Book;
 * short-head / long-tail breakdowns keep the notebook's convention: a user
   counts toward the ``_short`` average iff they have at least one short-head
   relevant item (likewise ``_long``).

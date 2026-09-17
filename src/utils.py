@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import random
-import time
 from pathlib import Path
 from typing import Any
 
@@ -48,17 +47,6 @@ def get_device(name: str = "auto") -> torch.device:
 
 def count_params(model: torch.nn.Module) -> int:
     return sum(p.numel() for p in model.parameters())
-
-
-class Timer:
-    """``with Timer() as t: ...; t.elapsed``"""
-
-    def __enter__(self):
-        self.t0 = time.time()
-        return self
-
-    def __exit__(self, *exc):
-        self.elapsed = time.time() - self.t0
 
 
 def _json_default(obj: Any):

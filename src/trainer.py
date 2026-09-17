@@ -34,7 +34,8 @@ every evaluation for curve plotting; it never influences selection.
 
 P2 fix #7 (lambda scale). The manifold term is applied every minibatch, so
 its per-epoch weight is ``n_batches * lambda``, and ``n_batches`` differs per
-dataset (Gowalla ~25, Yelp ~37, Amazon-Book ~73 at batch 32768).
+dataset (at batch 32768 with the default 10% validation split: 23 on
+Gowalla, 34 on Yelp2018, 66 on Amazon-Book).
 ``arm.lambda_scale=per_epoch`` divides lambda by ``n_batches`` so the summed
 per-epoch weight is dataset-invariant. ``none`` reproduces Chapter 5. The
 gate should run with ``none`` so only the protocol changes.
@@ -78,6 +79,15 @@ class Trainer:
         self.lap_source = str(a.laplacian)
         if self.lam > 0 and self.lap_source == "none":
             raise ValueError("lambda_manifold > 0 requires arm.laplacian in {embeddings, cooccurrence}")
+        if self.lam > 0 and self.W >= self.E:
+            # The transition fires at epoch W, so W == E means the manifold term
+            # is never switched on: the run would train pure BPR to completion
+            # while logging itself as an MR arm.
+            raise ValueError(
+                f"warmup_epochs={self.W} equals epochs={self.E} with "
+                f"lambda_manifold={self.lam:g}: the MR phase would never start and "
+                f"this would silently be a BPR run labelled as '{a.name}'. "
+                f"Lower warmup_epochs or raise epochs.")
         self.k = int(a.k_neighbors)
         self.rebuild_every = int(a.rebuild_every)
         self.knn_backend = str(a.knn_backend)
@@ -158,9 +168,22 @@ class Trainer:
         ck = torch.load(path, map_location=self.device, weights_only=False)
         if ck["epoch"] != self.W:
             raise ValueError(f"warm-start checkpoint is at epoch {ck['epoch']}, arm expects W={self.W}")
-        if ck["dataset"]["name"] != self.ds.name or ck["dataset"]["val_frac"] != self.ds.val_frac \
-                or ck["dataset"]["split_seed"] != self.ds.split_seed:
-            raise ValueError("warm-start checkpoint was produced on a different dataset/split")
+        meta = ck.get("model_meta", {})
+        cur = self.model.state_for_checkpoint()
+        if meta and meta != cur:
+            raise ValueError(f"warm-start checkpoint was produced with a different "
+                             f"architecture: {meta} vs {cur}")
+        # Compare every field that defines the training data. Checking only
+        # name/val_frac/split_seed would accept a checkpoint built with a
+        # different min_train, which is a genuinely different split.
+        prev_ds, cur_ds = ck["dataset"], self.ds.summary()
+        split_keys = ("name", "n_users", "n_items", "n_train", "n_val",
+                      "val_frac", "split_seed", "min_train")
+        mismatch = {k: (prev_ds.get(k), cur_ds.get(k))
+                    for k in split_keys if prev_ds.get(k) != cur_ds.get(k)}
+        if mismatch:
+            detail = ", ".join(f"{k}: {a_!r} -> {b_!r}" for k, (a_, b_) in mismatch.items())
+            raise ValueError(f"warm-start checkpoint was produced on a different split ({detail})")
         self.model.load_state_dict(ck["model"])
         self.opt.load_state_dict(ck["optimizer"])
         rng_state_load(ck["rng"])
@@ -209,6 +232,33 @@ class Trainer:
             "er_prop": effective_rank(torch.cat([au, ai]), int(g.er_max_samples),
                                       center=bool(g.er_center), seed=int(g.np_seed)),
         }
+
+    @torch.no_grad()
+    def _geometry(self, au: torch.Tensor, ai: torch.Tensor) -> dict:
+        """Every geometric quantity for one set of weights: both ER conventions
+        with deltas against the epoch-W reference, NP against that reference,
+        and NP_ref against the external Jaccard graph."""
+        g = self.cfg.geometry
+        geom = dict(self._er_pair(au, ai))
+        geom["er_table_pct"] = 100.0 * geom["er_table"] / self.model.dim
+        geom["er_prop_pct"] = 100.0 * geom["er_prop"] / self.model.dim
+        for conv in ("er_table", "er_prop"):
+            ref = self.er_ref.get(conv)
+            geom[f"{conv}_at_ref"] = ref
+            geom[f"delta_{conv}"] = (geom[conv] - ref) if ref is not None else None
+            geom[f"delta_{conv}_pct"] = (100.0 * (geom[conv] - ref) / ref) if ref else None
+        geom["effective_rank"] = geom["er_prop"]   # alias for older tooling
+        if self.ref_ego is not None:
+            ego = self.model.ego_embeddings()
+            for k in list(g.np_k):
+                geom[f"np_vs_ref@{k}"] = neighborhood_preservation(
+                    self.ref_ego, ego, k=int(k), max_samples=int(g.np_max_samples),
+                    seed=int(g.np_seed), backend=self.knn_backend)
+        for k in list(g.np_ref_k):
+            geom[f"np_ref@{k}"] = np_ref(ai, self.ds.UserItemNet, k=int(k),
+                                         max_samples=int(g.np_max_samples),
+                                         seed=int(g.np_seed), backend=self.knn_backend)
+        return geom
 
     def history_event(self, epoch: int, event: str, **kw) -> None:
         self.history.append({"epoch": epoch, "event": event, **kw})
@@ -361,6 +411,12 @@ class Trainer:
             raise RuntimeError(
                 f"no checkpoint was selected: no evaluation ran at or after epoch "
                 f"{self.select_from}. Check eval.every against epochs/warmup_epochs.")
+        # Geometry at the FINAL epoch, measured before the selected checkpoint is
+        # loaded (self.model still holds the last-epoch weights here). H1/H3
+        # claims about geometry and diversity are not what selection optimises,
+        # so they need a reading at a fixed epoch, identical across arms.
+        geom_last = self._geometry(*self._propagated())
+
         ck = torch.load(self.run_dir / "best.pt", map_location=self.device, weights_only=False)
         self.model.load_state_dict(ck["model"])
         self.model.eval()
@@ -370,25 +426,7 @@ class Trainer:
         val = evaluate(scorer, self.ds, "val", self.topks, self.eval_bs, self.device)
         test = evaluate(scorer, self.ds, "test", self.topks, self.eval_bs, self.device)
 
-        geom = dict(self._er_pair(au, ai))
-        geom["er_table_pct"] = 100.0 * geom["er_table"] / self.model.dim
-        geom["er_prop_pct"] = 100.0 * geom["er_prop"] / self.model.dim
-        for conv in ("er_table", "er_prop"):
-            ref = self.er_ref.get(conv)
-            geom[f"{conv}_at_ref"] = ref
-            geom[f"delta_{conv}"] = (geom[conv] - ref) if ref is not None else None
-            geom[f"delta_{conv}_pct"] = (100.0 * (geom[conv] - ref) / ref) if ref else None
-        # kept so older tooling/plots keep working
-        geom["effective_rank"] = geom["er_prop"]
-        if self.ref_ego is not None:
-            ego = self.model.ego_embeddings()
-            for k in list(g.np_k):
-                geom[f"np_vs_ref@{k}"] = neighborhood_preservation(
-                    self.ref_ego, ego, k=int(k), max_samples=int(g.np_max_samples),
-                    seed=int(g.np_seed), backend=self.knn_backend)
-        for k in list(g.np_ref_k):
-            geom[f"np_ref@{k}"] = np_ref(ai, self.ds.UserItemNet, k=int(k), max_samples=int(g.np_max_samples),
-                                         seed=int(g.np_seed), backend=self.knn_backend)
+        geom = self._geometry(au, ai)
 
         # A second, selection-independent reading. Every metric above is taken at
         # the checkpoint that maximised val recall; geometry and diversity are not
@@ -401,6 +439,7 @@ class Trainer:
         last = evals[-1] if evals else {}
         at_last = {k: v for k, v in last.items()
                    if k.startswith(("val_", "test_", "er_")) or k == "epoch"}
+        at_last["geometry"] = geom_last
 
         result = {
             "dataset": self.ds.name, "arm": str(self.cfg.arm.name),

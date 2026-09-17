@@ -179,3 +179,155 @@ def test_baseline_w0_selects_from_all_epochs(synth, tmp_path):
     cfg.arm.warmup_epochs = 0
     res, _ = _run(cfg)
     assert res["select_from_epoch"] == 0
+
+
+def test_selection_window_rejects_a_prefix_peak(synth, tmp_path):
+    """The shared prefix must be ineligible even when it holds the best score.
+
+    The natural toy curve rises monotonically, so `best_epoch` lands on the
+    last epoch whether or not the window is enforced -- a test built on it
+    passes even with the eligibility check deleted. This scripts a curve that
+    peaks *during* warm-up and then decays, which is the case the window
+    exists for (late-training decay, where the control would otherwise report
+    a prefix checkpoint the resumed treatment arm cannot reach).
+    """
+    from src.trainer import Trainer
+
+    cfg = _cfg(synth, "mr_off", tmp_path)
+    cfg.eval.every = 1
+    W = int(cfg.arm.warmup_epochs)
+    assert 0 < W < int(cfg.epochs)
+
+    scripted = {}   # epoch (1-based) -> val score; peak inside the prefix
+
+    class Scripted(Trainer):
+        def evaluate_point(self, epoch, phase, losses):
+            rec = super().evaluate_point(epoch, phase, losses)
+            score = 1.0 - 0.1 * abs((epoch + 1) - 1)      # max at epoch 1
+            rec[f"val_{self.select_metric}"] = score
+            scripted[epoch + 1] = score
+            return rec
+
+    set_seed(int(cfg.seed))
+    ds = InteractionDataset("synthetic", root=cfg.paths.data, val_frac=0.1,
+                            split_seed=2020, verbose=False)
+    dev = torch.device("cpu")
+    model = LightGCN(ds.n_users, ds.n_items, dim=cfg.model.dim,
+                     n_layers=cfg.model.n_layers, graph=ds.sparse_graph(dev))
+    res = Scripted(cfg, ds, model, dev, cfg.paths.run_dir).run()
+
+    best_overall = max(scripted, key=scripted.get)
+    assert best_overall <= W, "fixture must put the global peak inside the prefix"
+    assert res["best_epoch"] > W, (
+        f"selected epoch {res['best_epoch']} is inside the shared prefix "
+        f"(W={W}); the eligibility window is not being applied")
+    eligible = {e: v for e, v in scripted.items() if e > W}
+    assert res["best_epoch"] == max(eligible, key=eligible.get)
+
+
+def test_resume_trains_exactly_the_remaining_budget(synth, tmp_path):
+    """P0 #1: a resumed arm must train E - W epochs, never E.
+
+    This is the budget confound the whole corrected protocol exists to remove:
+    in the notebook the MR arm loaded a checkpoint and then trained a *full*
+    extra run on top of it. Asserting on `epochs_budget` alone cannot catch a
+    regression here, because that field just echoes the config; the number of
+    optimiser passes actually taken is what matters, so it is counted.
+    """
+    from src.trainer import Trainer
+
+    ca = _cfg(synth, "mr_off", tmp_path / "ctl")
+    ca.warmstart.save = True
+    E, W = int(ca.epochs), int(ca.arm.warmup_epochs)
+    assert 0 < W < E
+
+    counts = {}
+
+    class Counting(Trainer):
+        def train_epoch(self, epoch):
+            key = str(self.cfg.arm.name)
+            counts[key] = counts.get(key, 0) + 1
+            return super().train_epoch(epoch)
+
+    def run(cfg):
+        set_seed(int(cfg.seed))
+        ds = InteractionDataset("synthetic", root=cfg.paths.data, val_frac=0.1,
+                                split_seed=2020, verbose=False)
+        dev = torch.device("cpu")
+        m = LightGCN(ds.n_users, ds.n_items, dim=cfg.model.dim,
+                     n_layers=cfg.model.n_layers, graph=ds.sparse_graph(dev))
+        return Counting(cfg, ds, m, dev, cfg.paths.run_dir).run()
+
+    run(ca)
+    assert counts["mr_off"] == E, f"control trained {counts['mr_off']} epochs, expected {E}"
+
+    cb = _cfg(synth, "emb_mr", tmp_path / "mr")
+    cb.warmstart.load = str(Path(ca.paths.run_dir) / f"warmstart_ep{W}.pt")
+    res = run(cb)
+    assert counts["emb_mr"] == E - W, (
+        f"resumed arm trained {counts['emb_mr']} epochs; expected {E - W} "
+        f"(E={E}, W={W}). Training E epochs on top of a warm-start is exactly "
+        f"the budget confound the corrected protocol removes.")
+    assert counts["mr_off"] == counts["emb_mr"] + W   # total budget matched
+
+
+def test_mr_arm_refuses_a_warmup_that_never_ends(synth, tmp_path):
+    """W == E with lambda > 0 would train pure BPR while labelling itself an MR
+    arm, because the transition fires at epoch W and there is no epoch W."""
+    from src.trainer import Trainer
+    cfg = _cfg(synth, "emb_mr", tmp_path)
+    cfg.arm.warmup_epochs = int(cfg.epochs)
+    set_seed(int(cfg.seed))
+    ds = InteractionDataset("synthetic", root=cfg.paths.data, val_frac=0.1,
+                            split_seed=2020, verbose=False)
+    dev = torch.device("cpu")
+    m = LightGCN(ds.n_users, ds.n_items, dim=cfg.model.dim,
+                 n_layers=cfg.model.n_layers, graph=ds.sparse_graph(dev))
+    with pytest.raises(ValueError, match="MR phase would never start"):
+        Trainer(cfg, ds, m, dev, cfg.paths.run_dir)
+    # the same schedule is legitimate for a control arm (lambda = 0)
+    cfg2 = _cfg(synth, "mr_off", tmp_path / "ctl")
+    cfg2.arm.warmup_epochs = int(cfg2.epochs)
+    m2 = LightGCN(ds.n_users, ds.n_items, dim=cfg2.model.dim,
+                  n_layers=cfg2.model.n_layers, graph=ds.sparse_graph(dev))
+    Trainer(cfg2, ds, m2, dev, cfg2.paths.run_dir)
+
+
+def test_at_last_epoch_carries_geometry_including_np(synth, tmp_path):
+    """The selection-independent reading must include the NP metrics, or H1/H3
+    geometry claims have no fixed-epoch counterpart."""
+    res, _ = _run(_cfg(synth, "emb_mr", tmp_path))
+    g = res["at_last_epoch"]["geometry"]
+    for key in ("er_table", "er_prop", "np_ref@5"):
+        assert key in g and g[key] is not None, f"{key} missing from at_last_epoch"
+    assert any(k.startswith("np_vs_ref@") for k in g)
+    # it is a *different* reading from the selected checkpoint unless they coincide
+    assert set(g) == set(res["geometry"])
+
+
+def test_resume_rejects_a_different_split(synth, tmp_path):
+    """Regression: only name/val_frac/split_seed were compared, so a checkpoint
+    built with a different min_train resumed silently into another split."""
+    from src.trainer import Trainer
+    ca = _cfg(synth, "mr_off", tmp_path / "a")
+    ca.warmstart.save = True
+    set_seed(int(ca.seed))
+    ds_a = InteractionDataset("synthetic", root=ca.paths.data, val_frac=0.1,
+                              split_seed=2020, min_train=2, verbose=False)
+    dev = torch.device("cpu")
+    m = LightGCN(ds_a.n_users, ds_a.n_items, dim=ca.model.dim,
+                 n_layers=ca.model.n_layers, graph=ds_a.sparse_graph(dev))
+    Trainer(ca, ds_a, m, dev, ca.paths.run_dir).run()
+    ws = Path(ca.paths.run_dir) / f"warmstart_ep{int(ca.arm.warmup_epochs)}.pt"
+    assert ws.exists()
+
+    ds_b = InteractionDataset("synthetic", root=ca.paths.data, val_frac=0.1,
+                              split_seed=2020, min_train=15, verbose=False)
+    assert len(ds_b.trainUser) != len(ds_a.trainUser), "fixture must change the split"
+    cb = _cfg(synth, "emb_mr", tmp_path / "b")
+    cb.warmstart.load = str(ws)
+    m2 = LightGCN(ds_b.n_users, ds_b.n_items, dim=cb.model.dim,
+                  n_layers=cb.model.n_layers, graph=ds_b.sparse_graph(dev))
+    t = Trainer(cb, ds_b, m2, dev, cb.paths.run_dir)
+    with pytest.raises(ValueError, match="different split"):
+        t.load_warmstart(ws)

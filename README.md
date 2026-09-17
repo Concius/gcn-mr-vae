@@ -63,8 +63,10 @@ differ in one config value (`arm.lambda_manifold`); their first 100 epochs are
 the same run. That is the single-variable isolation of the MR effect.
 
 Checkpoints are selected on a validation split carved from `train.txt`
-(`split.val_frac=0.1`, fixed `split.split_seed`); the test set is scored once
-at the selected checkpoint. Validation items are excluded from the adjacency.
+(`split.val_frac=0.1`, fixed `split.split_seed`). The reported test numbers come
+from the selected checkpoint; with the shipped default `eval.test_each_eval:
+true` test is also scored at every evaluation, for curves only — it never
+influences selection. Validation items are excluded from the adjacency.
 
 ## Protocol knobs you may want to change (and what they do)
 

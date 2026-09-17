@@ -22,7 +22,7 @@ audit, (b) removal of Colab/Drive scaffolding, or (c) de-duplication.
 | 10–11 (Seção 3) | `parse_save_tag`, `inventory_drive`, `recover_metrics_*`, `_find_history` | deleted (Colab tax; nothing to recover when runs write their own files) |
 | 12–14 (Seção 4) | exploratory single runs | command-line overrides |
 | 15.1–15.30 (Bloco C) | 30 copy-paste cells, one per (arm × dataset × seed) | `python -m src.train -m ...` / `scripts/run_gate.sh` |
-| 16 (Seção 6) | plots, `wilcoxon_test_block_c`, `build_cap5_table` | `analysis/summarize.py` (plots: `notebooks/`) |
+| 16 (Seção 6) | plots, `wilcoxon_test_block_c`, `build_cap5_table` | `analysis/summarize.py` for the tables and the test. **The plotting code was not ported**; `notebooks/` is an empty place to put figure notebooks, and `history.json` carries every series the notebook plotted (per-epoch val/test metrics, losses, both ER conventions). |
 | Block 6 | `compute_np_ref` (Jaccard), `find_checkpoint`, `build_canonical_pool` | `src/metrics/geometry.py::np_ref`, computed inside every run; checkpoint discovery deleted |
 | Block 6b | per-epoch test curve with RNG protection | `eval.every=1 eval.test_each_eval=true`; RNG isolation is structural now |
 | Block 7 | K-sweep with `measure_initial_er` | `python -m src.train -m arm=baseline model.n_layers=2,3,4,5`; ER at init is `effective_rank_transition` with `warmup_epochs=0` |
@@ -50,7 +50,9 @@ audit, (b) removal of Colab/Drive scaffolding, or (c) de-duplication.
 3. **Validation-set checkpoint selection (added).** `src/data/splits.py`
    carves `split.val_frac` of each user's training items into a validation
    set (fixed `split_seed`, shared by all arms and seeds). Selection uses
-   `val_recall@20`; test is scored once at the selected checkpoint. The
+   `val_recall@20`; the reported test numbers come from the selected
+   checkpoint. With the shipped default `eval.test_each_eval: true` test is
+   also scored at every evaluation for the curve, never for selection. The
    adjacency is built from the reduced training set only. Consequence:
    absolute numbers will sit below Chapter 5's, which trained on 100% of
    train and selected on test. This is expected and must be said in the text.
@@ -85,10 +87,13 @@ audit, (b) removal of Colab/Drive scaffolding, or (c) de-duplication.
 
 ### Structural
 
-- Four functions were defined twice in different cells
-  (`compute_neighborhood_preservation`, `compute_manifold_loss`,
-  `compute_effective_rank`, `compute_np_ref`). They were semantically identical,
-  so no results were affected; the hazard is gone with modules.
+- Four functions were defined twice in different cells of the migrated
+  notebook (`LightGCN_Manifold_refactored (6).ipynb`):
+  `compute_neighborhood_preservation` (cells 8, 10), `compute_manifold_loss`
+  and `compute_effective_rank` (cells 10, 11), `compute_np_ref` (cells 56,
+  58). They were semantically identical, so no results were affected; the
+  hazard is gone with modules. Later notebook revisions de-duplicated some of
+  these, so a different `.ipynb` may show three rather than four.
 - Three loss classes and three training loops → `CompositeLoss` of
   `LossTerm`s plus one `Trainer`. The VAE attaches as a fourth term
   (`src/models/vae.py`, interface only).
@@ -365,7 +370,8 @@ running `run_gate_converged.sh` on the RTX 5060 Ti.
 changes which edges are held out but would have reused a stale cached graph.
 Now in the key.
 
-**4. Dead imports** (`defaultdict`, `Timer`) removed; the in-place masking of
+**4. Dead imports** (`defaultdict`, `Timer`) removed, and the now-unused
+`Timer` class itself deleted from `utils.py`; the in-place masking of
 the scorer's return value is now documented, since Module 3 must return a
 freshly allocated tensor.
 
@@ -394,3 +400,195 @@ Loss and gradient still bit-identical to the notebook (24/24). Two arms stay
 bit-identical through warm-up on real Gowalla without any warm-start file.
 The full CLI path — multirun, distinct folders, `results.json`,
 `analysis.summarize` — runs end to end on Gowalla.
+
+## Fourth pass: response to the external swarm audit (Kimi), 17 Sep 2026
+
+An independent multi-agent audit was run against the notebook, the package and
+this log. It reproduced the equivalence claims (24/24 bit-identical, NDCG
+-48.96%/-44.08%, 34/34 tests, ER 255.16) and found four real periphery defects.
+All are fixed; two of them were regressions introduced by the third pass.
+
+**1. `paired_wilcoxon` could report a false significance (high).** Selecting an
+arm by its bare name fell back to matching `arm`, which after the third pass's
+`arm_tag` expansion can match several configurations. With one extra tag it
+raised a cryptic broadcast error; with an extra tag on *both* arms it silently
+pooled them and reported `n=5` while testing 10 pairs, yielding p=0.000977 --
+below the 0.031 floor attainable with five seeds. Ambiguous labels are now
+refused with a message listing the candidate tags, and repeated seeds are
+rejected. Exact tags, and bare names while they remain unambiguous, work as
+before.
+
+**2. `run_gate_converged.sh` had a stale warm-start path (medium).** The third
+pass added `_K{layers}_d{dim}` to `arm_tag` but did not update the script that
+hardcodes the control's directory, so the optional follow-up would have failed
+on its second command. Fixed in the script and in all four documents, with a
+comment noting the path must track `model.n_layers`/`model.dim`.
+
+**3. Holm correction counted untestable rows (low).** Datasets skipped for too
+few paired seeds got `p=1.0` and inflated the multiplier. Only tested rows are
+corrected now, and `n_tests_corrected` is reported.
+
+**4. Undisclosed and inaccurate documentation (low).** Validation items can be
+drawn as BPR negatives, because collisions are checked against the reduced
+training matrix; excluding them would consult held-out labels during training,
+so the behaviour is deliberate -- now documented in `sampling.py`, with the
+magnitude (under 0.01% of draws on Gowalla, identical across arms). The claim
+that plots live in `notebooks/` is corrected: plotting was **not** ported, and
+`history.json` carries every series the notebook plotted. Warm-start resume now
+validates the architecture explicitly instead of relying on a shape error.
+
+### Vacuous tests, and how they were found
+
+The audit flagged two exclusion tests as vacuous. Rather than patch them by
+inspection, every safety-critical guarantee was **mutation-tested**: the line
+implementing it was deliberately broken and the suite re-run. This found that
+the first replacement test was *also* vacuous, and that a third test the audit
+had not flagged -- `test_selection_window_is_symmetric` -- passed with the
+eligibility check deleted, because the toy validation curve rises monotonically
+so the best epoch is the last one either way.
+
+The cause in every case was the same: at `k=10` on the fixture, users have few
+enough held-out items that they all fit in the list whether or not the masked
+items are removed. The rewritten tests assert at `k=1`, where a single
+displaced slot changes the metric exactly, and the selection test now scripts a
+validation curve that peaks *inside* the warm-up prefix.
+
+Mutation results (each row breaks one guarantee; the suite must fail):
+
+| mutation | caught |
+|---|---|
+| val positives not masked on test | yes |
+| train positives not masked on val | yes |
+| selection window disabled | yes |
+| NDCG ideal list = hits found | yes |
+| W=0 reference snapshot skipped | yes |
+| manifold term silently zeroed | yes (2 tests) |
+| popularity from reduced train | yes |
+| RNG state not coerced to CPU | **no -- CPU-only limitation** |
+| warm-start trains E instead of E-W | yes (added after this sweep) |
+| Laplacian not symmetrised | yes |
+| validation split not disjoint | yes |
+
+The last is unverifiable without a GPU: on CPU the saved RNG state is already a
+CPU tensor, so removing the coercion is a no-op. The guard matters only when
+`torch.load(map_location=cuda)` moves it, so it is exercised the first time a
+warm-start is resumed on the RTX 5060 Ti and cannot be covered here.
+
+## Verification of the fourth pass (17 Sep 2026)
+
+Every finding re-checked by execution, not inspection. 13/13 verification
+checks pass: ambiguous arm labels refused with the candidate tags listed,
+exact tags giving n=5 and p=0.03125 (the true five-seed floor), duplicate
+seeds refused, Holm correcting only tested rows, the converged script's
+warm-start path matching `arm_tag`, and all four disclosures in place.
+
+**Two further problems found while verifying.**
+
+*A stale path survived in the guide's command cheat-sheet.* The earlier fix
+replaced `runs/gowalla/mr_off_w1000/...` but the cheat-sheet used
+`runs/<ds>/mr_off_w1000/...`, which the pattern missed. No occurrence of the
+old tag now remains in any `.md`, `.sh` or `.py` file.
+
+*Three documented numbers were wrong.* The per-epoch batch counts
+("Gowalla ~25, Yelp ~37, Amazon-Book ~73") were computed on the **full**
+training set, but every run uses the reduced one. Measured from the real
+files: 23 / 34 / 66 with the default 10% split, against 25 / 38 / 73 without
+it. Corrected in both places, with a pointer to `n_batches_per_epoch` in
+`results.json` as the authoritative value. Two statements in
+`evaluate.py`'s docstring also predated the scorer refactor (it no longer
+propagates, and the hit matrix comes from an integer-key `np.isin` rather than
+CSR fancy-indexing); both corrected.
+
+**The most important guarantee in the project was untested.** Mutation testing
+revealed that changing `self.start_epoch = self.W` to `0` in `load_warmstart`
+— which makes a resumed arm train a full E epochs *on top of* the warm-start,
+recreating precisely the budget confound P0 #1 exists to remove — passed all
+35 tests. `epochs_budget` in `results.json` only echoes the config, so nothing
+observed the optimiser passes actually taken. `test_resume_trains_exactly_the_remaining_budget`
+now counts `train_epoch` calls and asserts the control takes E while the
+resumed arm takes E - W, and that the two sum correctly. Verified to fail
+under the mutation.
+
+Ten of eleven guarantees are now mutation-covered. The exception remains the
+GPU RNG coercion, which is a no-op on CPU and can only be exercised on the
+target hardware.
+
+## Fifth pass: remaining items from the follow-up audit (18 Sep 2026)
+
+The external follow-up verified the fourth pass (8/8 fixes reproduce, 36/36
+tests, 24/24 equivalence) and left three code items and several documentation
+items open. All are now closed.
+
+**1. `warmup_epochs == epochs` with λ>0 trained pure BPR under an MR label.**
+The transition fires *at* epoch W, so W == E meant it never fired: the run
+completed, every epoch logged `[warmup]`, no Laplacian was built, and
+`results.json` recorded `arm=emb_mr, lambda_manifold=1e-05`. The constructor
+now refuses that combination, while still allowing it for a λ=0 control, where
+it is a meaningful (if pointless) schedule. Mutation-tested.
+
+**2. `at_last_epoch` lacked the geometry.** The selection-independent reading
+carried only `er_*` from the evaluation record, so the NP metrics that H1 and
+H3 lean on had no fixed-epoch counterpart. The geometry block was factored into
+`Trainer._geometry` and is now computed twice from identical code: once at the
+selected checkpoint, and once at the final epoch *before* `best.pt` is loaded,
+so both readings contain the same keys (`er_*`, `delta_er_*`, `np_vs_ref@k`,
+`np_ref@k`). Mutation-tested.
+
+**3. Resume validated architecture but not the split.** Only name, `val_frac`
+and `split_seed` were compared, so a checkpoint built with a different
+`min_train` resumed silently into a different split. `load_warmstart` now
+compares every field that defines the training data — `n_users`, `n_items`,
+`n_train`, `n_val`, `val_frac`, `split_seed`, `min_train` — and names the
+mismatching fields. Note that dropping `min_train` from that list alone does
+not change behaviour: any `min_train` that actually alters the split also
+alters `n_train`/`n_val`, and when it does not the splits are byte-identical
+and accepting the resume is correct. That mutation is therefore benign rather
+than an uncaught defect, and is reported as such below.
+
+### Documentation corrections
+
+- *"test is scored once at the selected checkpoint"* was misleading: the
+  shipped default `eval.test_each_eval: true` scores test at every evaluation
+  for the curve. Reworded in README, MIGRATION and the guide to say the
+  *reported* numbers come from the selected checkpoint and the per-eval reading
+  never influences selection.
+- *"Four functions were defined twice"* is correct for the notebook actually
+  migrated, `LightGCN_Manifold_refactored (6).ipynb`, with the defining cells
+  now listed. Later revisions de-duplicated some, so another `.ipynb` may show
+  three.
+- The unused `Timer` class was deleted, making the "dead code removed" claim
+  true of the class and not only the import.
+
+### Previously undisclosed differences, now recorded
+
+- **Evaluation grid offset.** The notebook evaluated after epochs 1, 11,
+  21, … (`epoch % 10 == 0` with a 0-based counter, after training); the port
+  evaluates after epochs 10, 20, 30, …. A grid offset, identical for every arm.
+- **Popularity tie-breaking.** The notebook ordered items by count descending
+  with ties broken by first appearance in `trainItem` (dict insertion order);
+  the port breaks ties by ascending item id (`np.argsort(..., kind="stable")`
+  over `flatnonzero`). Measured on Gowalla: the boundary does sit inside a tie
+  group (count 22 on both sides) yet the two orderings produce **identical**
+  short-head sets — 0 of 8,196 items differ. Ascending id was kept because it
+  does not depend on file ordering.
+- **k-NN backend for the geometry metrics.** NP and NP_ref follow
+  `arm.knn_backend`, which defaults to `torch`; the notebook used sklearn. The
+  two agree on >99% of neighbours, and `knn_backend=sklearn` reproduces the
+  notebook path exactly.
+- **NP subsample seed** is fixed at `geometry.np_seed=42` for every run seed,
+  so all arms are measured on the same nodes. The notebook subsampled with the
+  run seed.
+- **Standard deviations** in `analysis/summarize.py` come from pandas
+  (`ddof=1`); the notebook's `build_cap5_table` used `np.std` (`ddof=0`). With
+  five seeds this raises the reported sd by about 12%.
+
+### Mutation coverage: 12 of 14 guarantees
+
+Caught: budget equalisation, selection window, val-masked-on-test,
+train-masked-on-val, NDCG ideal list, W=0 reference snapshot, manifold term
+applied, popularity source, Laplacian symmetrisation, validation-split
+disjointness, the W≥E guard, and `at_last_epoch` geometry.
+
+Not caught, both explained rather than papered over: the GPU RNG coercion (a
+no-op on CPU, exercisable only on the target GPU), and `min_train` in the
+resume check (a benign mutation — see item 3).

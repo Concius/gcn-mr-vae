@@ -357,7 +357,7 @@ Under matched budgets, `baseline` for E epochs and `mr_off` for E epochs are num
 
 **The defect.** The notebook's best-checkpoint logic tracked Recall@20 on the *test* set. Every reported number was optimistically biased by selection.
 
-**The rule.** `split.val_frac` of each user's training items (default 10%) is held out as validation, with a fixed `split_seed` shared by all runs. Checkpoints are selected on `val_recall@20`. Test is scored once at the selected checkpoint (and optionally at every evaluation for curve plotting, never for selection). Validation items are excluded from the adjacency matrix.
+**The rule.** `split.val_frac` of each user's training items (default 10%) is held out as validation, with a fixed `split_seed` shared by all runs. Checkpoints are selected on `val_recall@20`. The reported test numbers come from the selected checkpoint; with the shipped default `eval.test_each_eval: true` test is *also* scored at every evaluation so the curve can be plotted, but that reading never influences selection. Validation items are excluded from the adjacency matrix.
 
 **What it costs — measured, not assumed.** Holding everything else fixed
 (Gowalla, seed 2020, d = 64, 25 epochs, scored on the same test set), test
@@ -377,7 +377,7 @@ same seed.
 
 The gate should change only the protocol. Two knobs exist that change the *method* and must stay at their Chapter 5 values for the gate, then be varied as ablations:
 
-- `arm.lambda_scale=none` applies λ every minibatch, so the per-epoch weight is `n_batches · λ` and differs by dataset (≈23 batches on Gowalla, ≈37 Yelp, ≈73 Amazon-Book at batch 32,768). `per_epoch` divides λ by `n_batches` so the per-epoch weight is dataset-invariant. `results.json` records `n_batches_per_epoch` and `lambda_effective` either way.
+- `arm.lambda_scale=none` applies λ every minibatch, so the per-epoch weight is `n_batches · λ` and differs by dataset (at batch 32,768 and the default 10% validation split: 23 batches on Gowalla, 34 on Yelp2018, 66 on Amazon-Book; without the split they are 25/38/73, which is why `results.json` records the actual `n_batches_per_epoch` rather than a documented constant). `per_epoch` divides λ by `n_batches` so the per-epoch weight is dataset-invariant. `results.json` records `n_batches_per_epoch` and `lambda_effective` either way.
 - `eval.patience_evals=0`. Early stopping would let arms stop at different epochs, breaking Rule 1.
 
 ## 4.6 Symmetric checkpoint selection
@@ -557,7 +557,7 @@ Eight defects from the June and August audits, plus three found in the post-port
 
 1. **Warm-start budget confound.** *Notebook:* MR runs loaded the baseline's best checkpoint and trained 1,000 further epochs with a fresh optimiser. *Repository:* no such path exists; every arm trains exactly E epochs; the only resume mechanism carries model, optimiser and RNG and trains to the same E.
 2. **No MR-off control.** *Notebook:* the MR arm was compared to a baseline on a different schedule. *Repository:* `mr_off`, identical to `emb_mr` but λ = 0.
-3. **Checkpoint selection on test.** *Notebook:* best Recall@20 on the test set. *Repository:* validation split, fixed across seeds, excluded from the adjacency; test scored once at the selected checkpoint.
+3. **Checkpoint selection on test.** *Notebook:* best Recall@20 on the test set. *Repository:* validation split, fixed across seeds, excluded from the adjacency; reported test numbers taken from the val-selected checkpoint (test is also logged each evaluation for curves, never for selection).
 
 **P1 — blocks reporting**
 
@@ -828,7 +828,7 @@ bash scripts/run_gate.sh
 
 # shared warm-up
 ... arm=mr_off warmstart.save=true epochs=2000 arm.warmup_epochs=1000
-... arm=emb_mr 'warmstart.load=runs/<ds>/mr_off_w1000/seed${seed}/warmstart_ep1000.pt' epochs=2000 arm.warmup_epochs=1000
+... arm=emb_mr 'warmstart.load=runs/<ds>/mr_off_w1000_K3_d256/seed${seed}/warmstart_ep1000.pt' epochs=2000 arm.warmup_epochs=1000
 
 # results
 python -m analysis.summarize runs [--a emb_mr --b mr_off --metric recall@20]

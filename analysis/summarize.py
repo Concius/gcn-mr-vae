@@ -48,12 +48,36 @@ def paired_wilcoxon(df: pd.DataFrame, arm_a: str, arm_b: str, metric: str = "tes
     n=10 it is 1/1024. Report n alongside p. Holm-Bonferroni across datasets
     is applied in the ``p_holm`` column.
     """
+    def _select(g, label, ds):
+        """Rows for one arm, refusing anything ambiguous.
+
+        ``label`` may be an exact ``arm_tag`` or a bare ``arm`` name. A bare
+        name is only usable while it maps to a single configuration: once a
+        sweep has produced several tags for it (emb_mr at two lambdas, or two
+        depths), pooling them would test a mixture of configurations while
+        reporting the seed count of one. That silently yields p-values below
+        the floor attainable with the true number of seeds, so it is refused
+        rather than guessed at.
+        """
+        rows = g[g.arm_tag == label]
+        if rows.empty:
+            rows = g[g.arm == label]
+        tags = sorted(rows.arm_tag.unique())
+        if len(tags) > 1:
+            raise ValueError(
+                f"{ds}: '{label}' matches {len(tags)} configurations, so the "
+                f"comparison is ambiguous:\n  " + "\n  ".join(tags)
+                + "\nPass one of these exact tags with --a/--b.")
+        dup = rows.seed[rows.seed.duplicated()].tolist()
+        if dup:
+            raise ValueError(f"{ds}: '{label}' has repeated seeds {sorted(set(dup))}; "
+                             "the run directory holds duplicate results.")
+        return rows
+
     out = []
     for ds, g in df.groupby("dataset"):
-        # match by arm_tag first (exact hyperparameters), fall back to arm name
-        sel = lambda x: g[g.arm_tag == x] if (g.arm_tag == x).any() else g[g.arm == x]
-        a = sel(arm_a).set_index("seed")[metric]
-        b = sel(arm_b).set_index("seed")[metric]
+        a = _select(g, arm_a, ds).set_index("seed")[metric]
+        b = _select(g, arm_b, ds).set_index("seed")[metric]
         seeds = sorted(set(a.index) & set(b.index))
         if len(seeds) < 3:
             out.append({"dataset": ds, "n": len(seeds), "note": "need >= 3 paired seeds"})
@@ -68,17 +92,24 @@ def paired_wilcoxon(df: pd.DataFrame, arm_a: str, arm_b: str, metric: str = "tes
                     "mean_delta_pct": float(((x - y) / y * 100).mean()),
                     "wins": int((x > y).sum()), "stat": stat, "p": p})
     res = pd.DataFrame(out)
-    if "p" in res:
-        ps = res["p"].fillna(1.0).values
-        order = np.argsort(ps)
-        holm = np.empty_like(ps)
+    if "p" in res.columns:
+        # Correct only over datasets that actually produced a test; counting
+        # skipped rows would inflate the multiplier and hide real effects.
+        testable = res["p"].notna().values
+        ps = res.loc[testable, "p"].values
+        holm = np.full(len(res), np.nan)
         m = len(ps)
-        running = 0.0
-        for rank, idx in enumerate(order):
-            running = max(running, (m - rank) * ps[idx])
-            holm[idx] = min(1.0, running)
+        if m:
+            order = np.argsort(ps)
+            adj = np.empty(m)
+            running = 0.0
+            for rank, idx in enumerate(order):
+                running = max(running, (m - rank) * ps[idx])
+                adj[idx] = min(1.0, running)
+            holm[testable] = adj
         res["p_holm"] = holm
         res["significant_holm"] = res["p_holm"] < alpha
+        res["n_tests_corrected"] = m
     return res
 
 
