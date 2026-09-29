@@ -24,7 +24,7 @@ from typing import Protocol
 import torch
 import torch.nn.functional as F
 
-from .mr_layer import manifold_loss
+from .mr_layer import manifold_loss, pairwise_manifold_loss
 
 
 @dataclass
@@ -38,6 +38,7 @@ class BatchContext:
     all_items: torch.Tensor      # propagated, (n_items, d)
     epoch: int
     laplacian: torch.Tensor | None = None
+    knn: object | None = None            # KnnGraph, for the pairwise kernel modes
     extras: dict = field(default_factory=dict)
 
     @property
@@ -91,13 +92,22 @@ class ManifoldTerm:
     """
     name = "manifold"
 
-    def __init__(self, lam: float):
+    def __init__(self, lam: float, kernel: str = "laplacian"):
+        """``kernel='laplacian'`` is the original sparse-matrix path, unchanged.
+        ``frozen`` / ``fresh`` / ``grad`` use the pairwise path; see
+        :func:`pairwise_manifold_loss`."""
         self.lam = lam
+        self.kernel = kernel
 
     def __call__(self, ctx: BatchContext):
-        if ctx.laplacian is None or self.lam <= 0:
-            return ctx.all_users.new_zeros(()), {"manifold": 0.0}
-        m = manifold_loss(ctx.all_emb, ctx.laplacian)
+        if self.kernel == "laplacian":
+            if ctx.laplacian is None or self.lam <= 0:
+                return ctx.all_users.new_zeros(()), {"manifold": 0.0}
+            m = manifold_loss(ctx.all_emb, ctx.laplacian)
+        else:
+            if ctx.knn is None or self.lam <= 0:
+                return ctx.all_users.new_zeros(()), {"manifold": 0.0}
+            m = pairwise_manifold_loss(ctx.all_emb, ctx.knn, self.kernel)
         return self.lam * m, {"manifold": m.item()}
 
 

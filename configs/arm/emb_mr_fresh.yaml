@@ -1,0 +1,15 @@
+# @package arm
+# Control for emb_mr_dw. Weights recomputed from the current embeddings every
+# batch exactly as in emb_mr_dw, but DETACHED -- no gradient flows through them.
+# emb_mr_dw vs emb_mr_fresh isolates the gradient through the kernel;
+# emb_mr_fresh vs emb_mr isolates using current rather than build-time weights.
+name: emb_mr_fresh
+warmup_epochs: 100
+lambda_manifold: 1.0e-5
+laplacian: embeddings
+k_neighbors: 20
+rebuild_every: 50
+lambda_scale: none
+knn_backend: torch
+sigma: null
+kernel_weights: fresh

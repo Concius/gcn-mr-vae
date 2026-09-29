@@ -29,7 +29,15 @@ def collect_results(runs_root: str | Path) -> pd.DataFrame:
     rows = []
     for p in sorted(Path(runs_root).rglob("results.json")):
         r = json.load(open(p))
-        row = {"dataset": r["dataset"], "arm": r["arm"], "arm_tag": r.get("arm_tag", r["arm"]), "seed": r["seed"],
+        # Group by the directory the run actually lives in (the folder above
+        # seed<N>), not by the arm_tag stored in results.json. The stored tag is
+        # computed from hyperparameters and ignores a paths.run_dir override, so
+        # two runs deliberately separated on disk -- e.g. fresh vs restored Adam,
+        # which share every hyperparameter -- would otherwise be averaged together.
+        # For runs that did not override run_dir the two are identical.
+        dir_tag = p.parent.parent.name
+        row = {"dataset": r["dataset"], "arm": r["arm"], "arm_tag": dir_tag,
+               "config_tag": r.get("arm_tag", r["arm"]), "seed": r["seed"],
                "best_epoch": r["best_epoch"], "selected_on": r["selected_on"],
                "epochs": r["epochs_budget"], "warmup": r["warmup_epochs"],
                "lambda": r["lambda_manifold"], "path": str(p.parent)}
@@ -116,6 +124,14 @@ def paired_wilcoxon(df: pd.DataFrame, arm_a: str, arm_b: str, metric: str = "tes
 def summary_table(df: pd.DataFrame, metrics=None) -> pd.DataFrame:
     metrics = metrics or ["test_recall@20", "test_ndcg@20", "er_table", "er_prop", "np_ref@20",
                           "test_gini@20", "test_tail_catalog_coverage@20"]
+    dup = df[df.duplicated(["dataset", "arm_tag", "seed"], keep=False)]
+    if not dup.empty:
+        bad = sorted(set(map(tuple, dup[["dataset", "arm_tag"]].values.tolist())))
+        raise ValueError(
+            "repeated seeds inside one group -- two different runs would be "
+            "averaged as if they were one:\n  "
+            + "\n  ".join(f"{d} / {t}" for d, t in bad)
+            + "\nGive the runs distinct directories (paths.run_dir).")
     grp = df.groupby(["dataset", "arm_tag"])
     g = grp[metrics]
     out = pd.concat({"mean": g.mean(), "std": g.std()}, axis=1)
@@ -129,8 +145,12 @@ def main(argv=None):
     ap.add_argument("--a", default="emb_mr")
     ap.add_argument("--b", default="mr_off")
     ap.add_argument("--metric", default="recall@20")
+    ap.add_argument("--dataset", default=None,
+                    help="restrict to one dataset (e.g. the one a gate script just trained)")
     a = ap.parse_args(argv)
     df = collect_results(a.runs)
+    if a.dataset is not None:
+        df = df[df.dataset == a.dataset]
     if df.empty:
         print(f"no results.json under {a.runs}")
         return

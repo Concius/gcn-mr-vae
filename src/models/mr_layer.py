@@ -20,6 +20,7 @@ What changed:
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass, field
 
 import numpy as np
 import scipy.sparse as sp
@@ -127,6 +128,61 @@ def build_embedding_laplacian(emb: torch.Tensor, k: int = 20, sigma: float | Non
     return Lt
 
 
+@dataclass
+class KnnGraph:
+    """k-NN graph for the pairwise manifold term.
+
+    ``idx``   (n, k) neighbour ids, fixed until the next rebuild.
+    ``w0``    (n, k) Gaussian kernel weights computed at build time -- exactly
+              the values the sparse Laplacian path would use.
+    ``sigma`` median-heuristic kernel width, fixed until the next rebuild.
+    ``frac_beyond_crossover`` share of neighbour pairs whose squared kernel
+              distance exceeds 2 sigma^2 at build time -- where, in ``grad``
+              mode, the per-pair force turns repulsive. Exact for embeddings on
+              the unit sphere; an approximation otherwise, because the kernel
+              uses cosine distance while the energy uses Euclidean distance.
+    """
+    idx: torch.Tensor
+    w0: torch.Tensor
+    sigma: float
+    frac_beyond_crossover: float = float("nan")
+    _csr: tuple | None = field(default=None, init=False, repr=False, compare=False)
+
+    def csr_structure(self) -> tuple:
+        """Sparsity pattern of S and S^T for the knn_dots backward. Depends only
+        on ``idx``, so it is built once per rebuild and reused every batch."""
+        if self._csr is None:
+            self._csr = csr_structure(self.idx)
+        return self._csr
+
+
+def build_embedding_knn(emb: torch.Tensor, k: int = 20, sigma: float | None = None,
+                        backend: str = "torch", device: torch.device | None = None,
+                        verbose: bool = True) -> KnnGraph:
+    """Same neighbours, same weights and same sigma as
+    :func:`build_embedding_laplacian`, kept in pairwise form instead of being
+    assembled into a sparse matrix, so the weights can be recomputed (and
+    differentiated) from the current embeddings."""
+    device = device or emb.device
+    t0 = time.time()
+    if backend == "torch":
+        d, i = knn_cosine_torch(emb, k)
+    elif backend == "sklearn":
+        d, i = knn_cosine_sklearn(emb, k)
+    else:
+        raise ValueError(f"unknown knn backend {backend!r}")
+    w, sigma = gaussian_weights(d, sigma)
+    g = KnnGraph(idx=torch.from_numpy(np.ascontiguousarray(i)).long().to(device),
+                 w0=torch.from_numpy(np.ascontiguousarray(w)).to(device),
+                 sigma=float(sigma),
+                 frac_beyond_crossover=float(np.mean(2.0 * d > 2.0 * sigma ** 2)))
+    if verbose:
+        print(f"    kNN graph (n={emb.shape[0]:,}, k={k}, {backend}) pairs={g.idx.numel():,} "
+              f"sigma={sigma:.4f} beyond-crossover={100*g.frac_beyond_crossover:.2f}% "
+              f"in {time.time()-t0:.1f}s")
+    return g
+
+
 def build_cooccurrence_laplacian(user_item_csr: sp.csr_matrix, k: int = 20,
                                  device: torch.device | None = None,
                                  verbose: bool = True) -> torch.Tensor:
@@ -154,3 +210,125 @@ def build_cooccurrence_laplacian(user_item_csr: sp.csr_matrix, k: int = 20,
 def manifold_loss(Z: torch.Tensor, L: torch.Tensor) -> torch.Tensor:
     """Dirichlet energy tr(Z^T L Z) / n, computed as sum(Z * (L Z)) / n."""
     return (Z * torch.sparse.mm(L, Z)).sum() / Z.shape[0]
+
+
+KERNEL_MODES = ("frozen", "fresh", "grad")
+
+
+def csr_structure(idx: torch.Tensor) -> tuple:
+    """Canonical CSR patterns (column indices sorted within every row) for
+    S (row i holds idx[i, :]) and for S^T, plus the permutations that map the
+    flat (n*k,) gradient onto each pattern.
+
+    Sorted indices are required so the backward does not depend on how a given
+    backend treats unsorted CSR: PyTorch's CPU multiply tolerates them, but
+    cuSPARSE routines may assume sorted columns, and that cannot be tested
+    without the GPU. Built once per rebuild; per batch only values are permuted.
+    """
+    n, k = idx.shape
+    dev = idx.device
+    order = torch.argsort(idx, dim=1)                              # sort each row's neighbours
+    perm_s = ((torch.arange(n, device=dev) * k).unsqueeze(1) + order).reshape(-1)
+    cols_s = idx.gather(1, order).reshape(-1).contiguous()
+    crow_s = torch.arange(0, n * k + 1, k, device=dev)
+    rows = torch.arange(n, device=dev).repeat_interleave(k)
+    flat_cols = idx.reshape(-1)
+    perm_t = torch.argsort(flat_cols, stable=True)                 # group by column; stable keeps
+    crow_t = torch.zeros(n + 1, dtype=torch.int64, device=dev)     # rows ascending within a group
+    crow_t[1:] = torch.cumsum(torch.bincount(flat_cols, minlength=n), 0)
+    col_t = rows[perm_t].contiguous()
+    return crow_s, cols_s, perm_s, crow_t, col_t, perm_t
+
+
+class _KnnDots(torch.autograd.Function):
+    """dots[i, m] = z_i . z_{idx[i, m]} for the k-NN pairs.
+
+    Autograd through a plain gather would store an (n, k, d) tensor and then
+    scatter its gradient back into Z, which dominates the cost (measured on
+    Gowalla scale: 4.5 s of a 6 s step). Instead the forward is computed in row
+    chunks without keeping the gathered tensor, and the backward uses
+
+        dL/dZ = S Z + S^T Z,   S[i, idx[i, m]] = dL/d dots[i, m],
+
+    with the sparsity pattern precomputed once per rebuild (csr_structure).
+    """
+
+    @staticmethod
+    def forward(ctx, Z, idx, chunk, struct):
+        n = idx.shape[0]
+        out = torch.empty(idx.shape, dtype=Z.dtype, device=Z.device)
+        for s in range(0, n, chunk):
+            e = min(s + chunk, n)
+            out[s:e] = torch.bmm(Z[idx[s:e]], Z[s:e].unsqueeze(2)).squeeze(2)
+        ctx.save_for_backward(Z)
+        ctx.struct = struct
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_dots):
+        (Z,) = ctx.saved_tensors
+        crow_s, cols_s, perm_s, crow_t, col_t, perm_t = ctx.struct
+        n = Z.shape[0]
+        v = grad_dots.reshape(-1).to(Z.dtype)
+        S = torch.sparse_csr_tensor(crow_s, cols_s, v[perm_s].contiguous(), (n, n))
+        St = torch.sparse_csr_tensor(crow_t, col_t, v[perm_t].contiguous(), (n, n))
+        return S @ Z + St @ Z, None, None, None
+
+
+def knn_dots(Z: torch.Tensor, idx: torch.Tensor, chunk: int = 4096,
+             struct: tuple | None = None) -> torch.Tensor:
+    if struct is None:
+        struct = csr_structure(idx)
+    return _KnnDots.apply(Z, idx, chunk, struct)
+
+
+def _energy_from_dots(Z: torch.Tensor, g: KnnGraph, mode: str, dots: torch.Tensor) -> torch.Tensor:
+    n = Z.shape[0]
+    sq = (Z * Z).sum(1)                                    # (n,)    ||z_i||^2
+    d2 = (sq.unsqueeze(1) + sq[g.idx] - 2.0 * dots).clamp_min(0.0)
+    if mode == "frozen":
+        w = g.w0.to(Z.dtype)
+    else:
+        nrm = sq.clamp_min(1e-16).sqrt()                   # clamp before sqrt: finite grad at 0
+        cos = dots / (nrm.unsqueeze(1) * nrm[g.idx])
+        w = torch.exp(-(2.0 * (1.0 - cos)) / (2.0 * g.sigma ** 2))
+        if mode == "fresh":
+            w = w.detach()
+    return 0.5 * (w * d2).sum() / n
+
+
+def pairwise_manifold_loss(Z: torch.Tensor, g: KnnGraph, mode: str) -> torch.Tensor:
+    """The same Dirichlet energy in pairwise form.
+
+    For L = D - W with W = (W_knn + W_knn^T)/2 (as built by
+    :func:`laplacian_from_knn`), the identity
+
+        tr(Z^T L Z) = 1/2 * sum_i sum_{j in kNN(i)} w_ij * ||z_i - z_j||^2
+
+    holds exactly, so with ``mode='frozen'`` this returns the value and the
+    gradient of :func:`manifold_loss` (verified in tests/test_kernel_weights.py).
+
+    ``mode``:
+      * ``frozen`` -- w_ij are the build-time weights ``g.w0`` (constants).
+      * ``fresh``  -- w_ij recomputed from the current Z, then detached.
+      * ``grad``   -- w_ij recomputed from the current Z and kept in the graph,
+                      so the gradient also flows through the kernel.
+    Recomputed weights use the build-time formula: cosine distance on the
+    embeddings, w = exp(-2(1 - cos)/(2 sigma^2)), with ``g.sigma`` held fixed.
+
+    Every quantity is expressed through the pair dot products z_i . z_j and the
+    squared norms, so the only (n, k, d) interaction goes through
+    :func:`knn_dots`, whose backward is a sparse-dense product.
+    """
+    if mode not in KERNEL_MODES:
+        raise ValueError(f"mode must be one of {KERNEL_MODES}, got {mode!r}")
+    return _energy_from_dots(Z, g, mode, knn_dots(Z, g.idx, struct=g.csr_structure()))
+
+
+def _pairwise_manifold_loss_reference(Z: torch.Tensor, g: KnnGraph, mode: str) -> torch.Tensor:
+    """Plain-autograd reference (gathers an (n, k, d) tensor). Slow; kept only
+    so the tests can check the fast path against it."""
+    if mode not in KERNEL_MODES:
+        raise ValueError(f"mode must be one of {KERNEL_MODES}, got {mode!r}")
+    dots = torch.bmm(Z[g.idx], Z.unsqueeze(2)).squeeze(2)
+    return _energy_from_dots(Z, g, mode, dots)

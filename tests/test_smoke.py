@@ -331,3 +331,36 @@ def test_resume_rejects_a_different_split(synth, tmp_path):
     t = Trainer(cb, ds_b, m2, dev, cb.paths.run_dir)
     with pytest.raises(ValueError, match="different split"):
         t.load_warmstart(ws)
+
+
+def test_warmstart_weights_only_resets_optimizer(synth, tmp_path):
+    """Notebook-protocol hand-off: weights load, Adam starts fresh."""
+    from src.trainer import Trainer
+    ca = _cfg(synth, "mr_off", tmp_path / "a")
+    ca.warmstart.save = True
+    a, _ = _run(ca)
+    ws = Path(ca.paths.run_dir) / f"warmstart_ep{int(ca.arm.warmup_epochs)}.pt"
+
+    cb = _cfg(synth, "emb_mr", tmp_path / "b")
+    cb.warmstart.load = str(ws)
+    cb.warmstart.weights_only = True
+    set_seed(int(cb.seed))
+    ds = InteractionDataset("synthetic", root=cb.paths.data, val_frac=0.1,
+                            split_seed=2020, verbose=False)
+    dev = torch.device("cpu")
+    m = LightGCN(ds.n_users, ds.n_items, dim=cb.model.dim,
+                 n_layers=cb.model.n_layers, graph=ds.sparse_graph(dev))
+    t = Trainer(cb, ds, m, dev, cb.paths.run_dir)
+    t.load_warmstart(ws)
+    assert len(t.opt.state) == 0, "optimizer state must be empty (fresh Adam)"
+    assert t.start_epoch == int(cb.arm.warmup_epochs)
+    assert t.ref_ego is not None and t.er_ref, "reference must come from loaded weights"
+
+    # the default path still restores the optimizer
+    m2 = LightGCN(ds.n_users, ds.n_items, dim=cb.model.dim,
+                  n_layers=cb.model.n_layers, graph=ds.sparse_graph(dev))
+    cc = _cfg(synth, "emb_mr", tmp_path / "c")
+    cc.warmstart.load = str(ws)
+    t2 = Trainer(cc, ds, m2, dev, cc.paths.run_dir)
+    t2.load_warmstart(ws)
+    assert len(t2.opt.state) > 0, "default resume must restore optimizer moments"

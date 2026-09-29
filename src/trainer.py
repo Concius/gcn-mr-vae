@@ -54,7 +54,8 @@ from tqdm import tqdm
 from .metrics.evaluate import dot_product_scorer, evaluate
 from .metrics.geometry import effective_rank, neighborhood_preservation, np_ref
 from .models.losses import BPRTerm, BatchContext, CompositeLoss, L2EgoTerm, ManifoldTerm
-from .models.mr_layer import build_cooccurrence_laplacian, build_embedding_laplacian
+from .models.mr_layer import (KERNEL_MODES, build_cooccurrence_laplacian,
+                              build_embedding_knn, build_embedding_laplacian)
 from .sampling import minibatch, n_batches, uniform_sample
 from .utils import count_params, json_dump, rng_state_dict, rng_state_load
 
@@ -89,6 +90,16 @@ class Trainer:
                 f"this would silently be a BPR run labelled as '{a.name}'. "
                 f"Lower warmup_epochs or raise epochs.")
         self.k = int(a.k_neighbors)
+        # How the manifold term is computed. Absent from the original arm files,
+        # so those keep the sparse-Laplacian path and their saved configs stay
+        # byte-identical (the clobber guard still lets old runs be resumed).
+        self.kernel = str(a.get("kernel_weights", "laplacian"))
+        if self.kernel not in ("laplacian",) + KERNEL_MODES:
+            raise ValueError(f"arm.kernel_weights={self.kernel!r}; expected laplacian|"
+                             + "|".join(KERNEL_MODES))
+        if self.kernel != "laplacian" and self.lap_source != "embeddings":
+            raise ValueError("arm.kernel_weights other than 'laplacian' requires "
+                             "arm.laplacian=embeddings")
         self.rebuild_every = int(a.rebuild_every)
         self.knn_backend = str(a.knn_backend)
         self.sigma = None if a.sigma is None else float(a.sigma)
@@ -103,7 +114,7 @@ class Trainer:
             raise ValueError(a.lambda_scale)
 
         self.opt = torch.optim.Adam(self.model.parameters(), lr=float(cfg.optim.lr), eps=1e-8)
-        self.loss = CompositeLoss([BPRTerm(), L2EgoTerm(float(cfg.optim.decay)), ManifoldTerm(self.lam_eff)])
+        self.loss = CompositeLoss([BPRTerm(), L2EgoTerm(float(cfg.optim.decay)), ManifoldTerm(self.lam_eff, kernel=self.kernel)])
 
         self.sampler_rng = np.random.default_rng(int(cfg.seed))
 
@@ -136,6 +147,7 @@ class Trainer:
 
         self.resumed = bool(cfg.warmstart.load)
         self.laplacian: torch.Tensor | None = None
+        self.knn = None   # KnnGraph, used instead of self.laplacian by the pairwise modes
         self.ref_ego: torch.Tensor | None = None   # ego snapshot at epoch W
         self.history: list[dict] = []
         self.best = {"score": -1.0, "epoch": -1}
@@ -165,6 +177,18 @@ class Trainer:
         return path
 
     def load_warmstart(self, path: str | os.PathLike) -> None:
+        """Resume from a checkpoint saved at epoch W.
+
+        Default: model + optimiser + RNG, so the resumed arm is a bit-exact
+        continuation of the run that saved it.
+
+        ``warmstart.weights_only=true`` loads *only* the weights, leaving a
+        fresh Adam and the run's own RNG stream. That reproduces the notebook's
+        hand-off (`model.load_state_dict(...)`, optimiser constructed after),
+        and is intended for replicating the Chapter 5 protocol -- not for new
+        experiments, since resetting Adam's moments on a converged model gives
+        an unusually large first step.
+        """
         ck = torch.load(path, map_location=self.device, weights_only=False)
         if ck["epoch"] != self.W:
             raise ValueError(f"warm-start checkpoint is at epoch {ck['epoch']}, arm expects W={self.W}")
@@ -185,6 +209,16 @@ class Trainer:
             detail = ", ".join(f"{k}: {a_!r} -> {b_!r}" for k, (a_, b_) in mismatch.items())
             raise ValueError(f"warm-start checkpoint was produced on a different split ({detail})")
         self.model.load_state_dict(ck["model"])
+        if bool(self.cfg.warmstart.get("weights_only", False)):
+            # notebook-equivalent hand-off: fresh optimiser, fresh RNG stream,
+            # reference snapshot taken from the freshly loaded weights
+            self.ref_ego = self.model.ego_embeddings().detach().clone()
+            self.er_ref = self._er_pair()
+            self.history = []
+            self.start_epoch = self.W
+            print(f"  resumed from {path} at epoch {self.W} "
+                  f"(WEIGHTS ONLY -- fresh Adam, fresh RNG; notebook protocol)")
+            return
         self.opt.load_state_dict(ck["optimizer"])
         rng_state_load(ck["rng"])
         self.sampler_rng.bit_generator.state = ck["sampler_rng"]
@@ -207,14 +241,21 @@ class Trainer:
             return
         if self.lap_source == "embeddings":
             au, ai = self._propagated()
-            self.laplacian = build_embedding_laplacian(torch.cat([au, ai]), k=self.k, sigma=self.sigma,
-                                                       backend=self.knn_backend, device=self.device)
+            if self.kernel == "laplacian":
+                self.laplacian = build_embedding_laplacian(torch.cat([au, ai]), k=self.k, sigma=self.sigma,
+                                                           backend=self.knn_backend, device=self.device)
+            else:
+                self.knn = build_embedding_knn(torch.cat([au, ai]), k=self.k, sigma=self.sigma,
+                                               backend=self.knn_backend, device=self.device)
         elif self.lap_source == "cooccurrence":
             if self.laplacian is None:   # fixed: build once
                 self.laplacian = build_cooccurrence_laplacian(self.ds.UserItemNet, k=self.k, device=self.device)
         else:
             raise ValueError(self.lap_source)
-        self.history_event(epoch, "laplacian_built", source=self.lap_source)
+        extra = {}
+        if self.knn is not None:
+            extra = {"sigma": self.knn.sigma, "frac_beyond_crossover": self.knn.frac_beyond_crossover}
+        self.history_event(epoch, "laplacian_built", source=self.lap_source, kernel=self.kernel, **extra)
 
     @torch.no_grad()
     def _er_pair(self, au=None, ai=None) -> dict:
@@ -294,7 +335,8 @@ class Trainer:
         n = 0
         for bu, bp, bn in minibatch(users, pos, neg, batch_size=self.batch_size):
             au, ai = self.model.computer()
-            ctx = BatchContext(self.model, bu, bp, bn, au, ai, epoch, laplacian=self.laplacian)
+            ctx = BatchContext(self.model, bu, bp, bn, au, ai, epoch,
+                               laplacian=self.laplacian, knn=self.knn)
             total, logs = self.loss(ctx)
             self.opt.zero_grad(set_to_none=True)
             total.backward()

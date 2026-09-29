@@ -592,3 +592,61 @@ disjointness, the W≥E guard, and `at_last_epoch` geometry.
 Not caught, both explained rather than papered over: the GPU RNG coercion (a
 no-op on CPU, exercisable only on the target GPU), and `min_train` in the
 resume check (a benign mutation — see item 3).
+
+## Differentiable kernel weights (post-gate plan, step 2)
+
+New arms `emb_mr_dw` and `emb_mr_fresh`; `emb_mr` and every other arm are
+unchanged. All claims below were verified by running them before hand-over.
+
+**Design.** Making the kernel weights differentiable necessarily recomputes
+them from the current embeddings every batch, whereas `emb_mr` computes them
+once per rebuild and freezes them for 50 epochs. Compared against `emb_mr`
+alone, "weights become current" and "gradient flows through the weights" would
+be confounded. So the weights come in three modes on one pairwise code path:
+
+| mode | weights | role |
+|---|---|---|
+| `frozen` | build-time, constant | must reproduce `emb_mr` exactly (verification only) |
+| `fresh` | recomputed each batch, detached | arm `emb_mr_fresh`: the control |
+| `grad` | recomputed each batch, differentiable | arm `emb_mr_dw`: the experiment |
+
+Neighbour sets, sigma (median heuristic), lambda, W, E and the 50-epoch
+rebuild are identical across all three. `emb_mr` keeps its original sparse
+Laplacian path; the new arms select the pairwise path via
+`arm.kernel_weights`, a key absent from the original arm files so their saved
+configs stay byte-identical.
+
+**Correctness.** Via the exact identity
+tr(ZᵀLZ) = ½ Σᵢ Σⱼ∈kNN(i) wᵢⱼ ‖zᵢ − zⱼ‖², the `frozen` mode reproduces the sparse
+term: value error 0 and gradient error 2.8×10⁻¹⁷ in float64; value identical and
+gradient 1.3×10⁻⁷ relative against `emb_mr`'s actual float32 term. Over a full
+training run at lambda = 1, `frozen` matches `emb_mr` to 7.5×10⁻⁹ in the final
+embeddings while removing MR moves them by 2×10⁻² — so the check discriminates.
+`fresh` and `grad` share their value exactly and differ in gradient by 30%.
+gradcheck passes; a sign test on the unit circle confirms `grad` attracts close
+pairs and repels pairs beyond 2σ², while detached modes only ever attract.
+
+**Performance.** Plain autograd through the neighbour gather cost 6.1 s per call
+at Gowalla scale on CPU (vs 0.6 s for the sparse term), 4.5 s of it in
+scattering an (n, k, d) gradient. A custom backward (`_KnnDots`) computes the
+same gradient as S·Z + Sᵀ·Z with a CSR pattern built once per rebuild, bringing
+it to 2.0 s with no extra memory beyond the graph build. It is tested against
+the plain-autograd reference (`_pairwise_manifold_loss_reference`) to 10⁻¹² in
+every mode. CSR column indices are kept sorted: PyTorch's CPU multiply
+tolerates unsorted ones, but cuSPARSE on the GPU may not, and that cannot be
+tested here. GPU speed is unmeasured; time the first MR epochs on the RTX 5060 Ti.
+
+**Diagnostic.** Each rebuild logs sigma and `frac_beyond_crossover`, the share
+of neighbour pairs past the point where `grad` turns repulsive (exact on the
+unit sphere, approximate otherwise). In a short CPU run on Gowalla at d = 64 it
+was 0.00% and 0.56% — early, small embeddings, so not a result; it is logged so
+the real run can say whether repulsion ever engages.
+
+**Tests.** 21 new (62 total); `audit_equivalence.py` still 24/24. Mutation
+testing: 20 of 20 deliberate bugs caught — 7 in the pairwise term, 6 in the
+trainer/loss wiring, 7 in the custom backward and its CSR structure.
+
+**Analysis.** `analysis/compare_kernel.py`, pre-registered: primary test is
+`emb_mr_dw` vs `emb_mr_fresh` on er_table (uncorrected, single test);
+everything else Holm-corrected together. Verified on a replica with planted
+effects.

@@ -62,3 +62,23 @@ def test_rng_state_load_accepts_non_cpu_shaped_input():
     st = {"python": list(st["python"]), "numpy": st["numpy"],
           "torch": st["torch"].clone().to(torch.uint8)}
     rng_state_load(st)   # must not raise
+
+
+def test_summary_groups_by_directory_not_stored_tag(tmp_path):
+    """Two runs with identical hyperparameters placed in different directories
+    (e.g. fresh vs restored Adam) must stay separate. The stored arm_tag is
+    computed from hyperparameters and ignores a paths.run_dir override, so
+    grouping on it averaged them together and reported n=6 from 3 seeds."""
+    import json
+    from analysis.summarize import collect_results, summary_table
+    for folder, rec in (("fresh", 0.19), ("restored", 0.18)):
+        for s in (2020, 2021, 2022):
+            p = tmp_path / "gowalla" / folder / f"seed{s}"; p.mkdir(parents=True)
+            json.dump({"dataset": "gowalla", "arm": "emb_mr", "arm_tag": "IDENTICAL",
+                       "seed": s, "best_epoch": 1, "selected_on": "", "epochs_budget": 1,
+                       "warmup_epochs": 0, "lambda_manifold": 0.0,
+                       "test": {"recall@20": rec}, "val": {}, "geometry": {"er_table": 1.0}},
+                      open(p / "results.json", "w"))
+    t = summary_table(collect_results(tmp_path), metrics=["test_recall@20"])
+    assert list(t[("n", "seeds")]) == [3, 3]
+    assert sorted(t[("mean", "test_recall@20")].round(2)) == [0.18, 0.19]

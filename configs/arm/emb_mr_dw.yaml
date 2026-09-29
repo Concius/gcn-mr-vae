@@ -1,0 +1,15 @@
+# @package arm
+# Emb-MR with DIFFERENTIABLE kernel weights (post-gate plan, step 2).
+# Identical to emb_mr except that the Gaussian kernel weights w_ij are recomputed
+# from the current embeddings every batch and kept in the autograd graph.
+# Neighbour sets and sigma remain fixed between rebuilds (every 50 epochs).
+name: emb_mr_dw
+warmup_epochs: 100
+lambda_manifold: 1.0e-5
+laplacian: embeddings
+k_neighbors: 20
+rebuild_every: 50
+lambda_scale: none
+knn_backend: torch
+sigma: null
+kernel_weights: grad

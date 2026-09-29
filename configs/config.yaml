@@ -41,6 +41,8 @@ eval:
 warmstart:
   save: false           # save model+optimizer+RNG at epoch W (to share a prefix across arms)
   load: null            # path to a warmstart_ep<W>.pt; skips epochs [0, W)
+  weights_only: false   # true = load weights only (fresh Adam, fresh RNG), which
+                        # reproduces the notebook's hand-off. For replication only.
 
 geometry:
   er_each_eval: true

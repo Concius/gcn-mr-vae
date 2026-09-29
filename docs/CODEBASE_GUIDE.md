@@ -232,7 +232,9 @@ One builder, two neighbour sources, one loss function.
 
 `laplacian_from_knn(idx, w, n)` assembles `W`, symmetrises it as `(W + Wᵀ)/2`, and returns `L = D − W` as a SciPy matrix; `scipy_to_torch_sparse` moves it to the GPU. The unit tests check that rows sum to zero, that `L` is symmetric, and that the diagonal is non-negative.
 
-`build_embedding_laplacian` (Emb-MR) and `build_cooccurrence_laplacian` (CoOcc-MR, block-diagonal `[L_user, L_item]`) are the two public entry points. `manifold_loss(Z, L)` computes `sum(Z ⊙ (L Z)) / n`, which equals `tr(ZᵀLZ) / n` without forming the dense product — verified against the explicit trace in the tests.
+`build_embedding_laplacian` (Emb-MR) and `build_cooccurrence_laplacian` (CoOcc-MR, block-diagonal `[L_user, L_item]`) are the two public entry points.
+
+For the differentiable-kernel arms, `build_embedding_knn` returns the same neighbours, weights and σ as a `KnnGraph` instead of a matrix, and `pairwise_manifold_loss(Z, graph, mode)` computes the same energy in pairwise form, with the weights `frozen`, `fresh` or `grad` (see `MIGRATION.md`). Its only `(n, k, d)` interaction goes through `knn_dots`, a custom autograd function whose backward is a sparse-dense product on a CSR pattern built once per rebuild. `manifold_loss(Z, L)` computes `sum(Z ⊙ (L Z)) / n`, which equals `tr(ZᵀLZ) / n` without forming the dense product — verified against the explicit trace in the tests.
 
 ### `losses.py` — the composable objective
 
@@ -334,6 +336,8 @@ An **arm** is one experimental condition. The four defined arms:
 | `mr_off` | W | BPR | none | **the control** — identical to `emb_mr` except λ = 0 |
 | `emb_mr` | W | BPR + MR | k-NN on embeddings, rebuilt every 50 | the proposed method (H2, H3) |
 | `coocc_mr` | W | BPR + MR | fixed, from `R` | the redundancy check (§6.3) |
+| `emb_mr_fresh` | W | BPR + MR | as `emb_mr`, kernel weights recomputed every batch, detached | control for `emb_mr_dw` |
+| `emb_mr_dw` | W | BPR + MR | as `emb_mr`, kernel weights recomputed every batch, **differentiable** | differentiable-kernel experiment |
 
 The primary comparison is `emb_mr` against `mr_off`. They share `W`, `E`, the reference snapshot, and — when resumed from the same warm-start file — the exact model, optimiser and random state at epoch W. They differ in one config value. Any difference in outcome is attributable to the manifold term.
 
@@ -439,6 +443,19 @@ ep   20 [mr    ] loss=0.0995 mani=3.578e+01 | val recall@20=0.1042 | test recall
 A trailing `*` marks a new best on the selection metric. The final line reports the selected checkpoint's numbers.
 
 Timing on the 5060 Ti (Gowalla, d = 256): about 1.5 s per BPR epoch, 2.3 s per MR epoch, 2 s per evaluation, 0.9 s per Laplacian rebuild. A 1,000-epoch run is ~28 min (`mr_off`) or ~41 min (`emb_mr`).
+
+Other datasets cost more per epoch, because every training batch re-propagates
+the whole graph: cost scales with batches × edges. Measured on CPU at d = 64:
+
+| dataset | nodes | edges | batches/epoch | relative epoch cost |
+|---|---|---|---|---|
+| Gowalla | 70,839 | 1.46 M | 23 | 1.0× |
+| Yelp2018 | 69,716 | 2.22 M | 34 | 1.95× |
+| Amazon-Book | 144,242 | 4.28 M | 66 | 8.6× |
+
+The GPU ratios are unmeasured and may be somewhat smaller for the larger graphs,
+which make better use of GPU parallelism. Treat the CPU ratios as a planning
+upper bound and time the first epochs on the GPU before committing to a long run.
 
 ## 5.3 Running the gate
 
