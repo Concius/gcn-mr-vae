@@ -55,7 +55,8 @@ from .metrics.evaluate import dot_product_scorer, evaluate
 from .metrics.geometry import effective_rank, neighborhood_preservation, np_ref
 from .models.losses import BPRTerm, BatchContext, CompositeLoss, L2EgoTerm, ManifoldTerm
 from .models.mr_layer import (KERNEL_MODES, build_cooccurrence_laplacian,
-                              build_embedding_knn, build_embedding_laplacian)
+                              build_embedding_knn, build_embedding_laplacian,
+                              kernel_force_diagnostics)
 from .sampling import minibatch, n_batches, uniform_sample
 from .utils import count_params, json_dump, rng_state_dict, rng_state_load
 
@@ -255,7 +256,8 @@ class Trainer:
             raise ValueError(self.lap_source)
         extra = {}
         if self.knn is not None:
-            extra = {"sigma": self.knn.sigma, "frac_beyond_crossover": self.knn.frac_beyond_crossover}
+            extra = {"sigma": self.knn.sigma, "frac_beyond_crossover": self.knn.frac_beyond_crossover,
+                     "frac_repel_exact": self.knn.frac_repel_exact}
         self.history_event(epoch, "laplacian_built", source=self.lap_source, kernel=self.kernel, **extra)
 
     @torch.no_grad()
@@ -369,6 +371,11 @@ class Trainer:
             rec.update({f"test_{k}": v for k, v in test.items()})
         if bool(self.cfg.geometry.er_each_eval):
             rec.update(self._er_pair(au, ai))
+        if self.knn is not None:
+            # Descriptive only: no randomness, no gradient, so logging it cannot
+            # change the training trajectory.
+            rec.update({f"kd_{k}": v for k, v in
+                        kernel_force_diagnostics(torch.cat([au, ai]), self.knn).items()})
         self.model.train()
         return rec
 
@@ -435,6 +442,8 @@ class Trainer:
                           if f"test_{self.select_metric}" in rec else "")
                        + (f" | ER_tab={rec['er_table']:.1f} ER_prop={rec['er_prop']:.1f}"
                           if "er_table" in rec else "")
+                       + (f" | repel={100 * rec['kd_frac_repel_exact']:.2f}%"
+                          if "kd_frac_repel_exact" in rec else "")
                        + (" *" if improved else ("" if eligible else " (prefix)")))
                 tqdm.write(msg)
                 if self.wandb is not None:

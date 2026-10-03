@@ -747,3 +747,103 @@ of risking an exception or a NaN in Holm.
 **Clean-ups.** Dead variables and unused imports removed; pyflakes is clean apart
 from one intentional side-effect import (`import src.train`, which registers the
 run-folder resolver). Config wiring verified complete in both directions.
+
+## Pair-split of the kernel gradient (4 Oct 2026) -- pre-registered before running
+
+Question carried over from Tier 0: does `emb_mr_dw`'s effective-rank gain come
+from the few neighbour pairs that the kernel gradient turns net-repulsive, or
+from the many pairs whose attraction it merely weakens?
+
+### The net-repulsion rule, and a correction to the logged diagnostic
+
+Per pair, E = w(cos) ||z_i - z_j||^2 with w = exp(-(1 - cos)/sigma^2). The
+kernel term d2 * grad(w) is purely tangential and pushes the pair apart in
+angle; the tangential part of the attraction pulls it together. Comparing the
+two coefficients gives the exact rule: **net-repulsive iff d2 > 2 sigma^2
+|z_i||z_j|**, symmetric in i and j. Checked against autograd on 20,000 random
+pairs with varied norms: 20,000/20,000 agree.
+
+Dividing by |z_i||z_j| gives 2(1 - cos) + (r + 1/r - 2) > 2 sigma^2 with
+r = |z_i|/|z_j|. The rule logged until now as `frac_beyond_crossover`
+(1 - cos > sigma^2) is the unit-sphere case; off the sphere the extra term is
+>= 0, so **the logged share can only undercount**. On a trained synthetic
+LightGCN (neighbour norm ratio median 1.15, 90th percentile 1.43) the logged
+rule gave 6.5% and the exact rule 16.6%. Synthetic, so only illustrative.
+
+Consequence: the Tier 0 statement that the dw - emb_mr ER gap "keeps growing
+where no net-repulsive pairs remain" rests on the undercounting share and is
+**suspended** until re-measured. `analysis/crossover_check.py` does that from
+the saved checkpoints on CPU (graph rebuilt at the selected checkpoint, so an
+approximation of the graph in use; early epochs are not reachable that way).
+
+### Design
+
+Two arms, routing the gradient through the kernel weights with
+`torch.where(mask, w, w.detach())`: same loss value as `fresh` and `grad`
+everywhere, kernel gradient kept only on the routed pairs.
+
+- `emb_mr_dw_weaken` (mode `grad_weaken`): kernel gradient only on pairs that
+  stay net-attractive.
+- `emb_mr_dw_repel` (mode `grad_repel`): kernel gradient only on net-repulsive pairs.
+
+With the existing `emb_mr_fresh` (no kernel gradient) and `emb_mr_dw` (all
+pairs) this is a 2x2 factorial, so both main effects and the interaction are
+estimable. Gradients add exactly: weaken + repel - fresh == grad.
+
+Choices made in advance:
+- **Exact rule**, not the unit-sphere one.
+- **Re-evaluated every batch**, not frozen at rebuild: an arm is a routing
+  rule, so the two classes can evolve differently across arms. Inherent, and
+  stated.
+- The classification is the sign of **the pair term's own force** on the
+  propagated embeddings. A node's actual update also reflects its other pairs,
+  BPR, back-propagation through LightGCN and Adam (cf. Islam & Fleischer, TMLR,
+  on per-pair attraction/repulsion "shapes" versus net motion).
+- Like `fresh`, a routed gradient is not the derivative of the reported loss;
+  it descends a surrogate with w held fixed on unrouted pairs. The masking
+  technique is what Cloud et al. (2024) call gradient routing.
+
+### Pre-registration (`analysis/compare_split.py`)
+
+Gowalla, 10 seeds (2020-2029), paired by seed, two-sided exact Wilcoxon.
+- **Primary:** weaken - repel on er_table, uncorrected.
+- **Secondary**, Holm-corrected together (11 tests): weaken - fresh, repel -
+  fresh and the interaction (dw - weaken - repel + fresh) on er_table,
+  np_ref@20 and recall@20; weaken - repel on np_ref@20 and recall@20.
+- **Descriptive:** each class's share of dw's ER gain per seed; net-repulsive
+  share (exact and sphere rule) and the kernel-budget share of net-repulsive
+  pairs per MR window.
+- **Caveat fixed in advance:** the weaken class is the larger one, so a
+  positive primary can partly reflect class size. The kernel-budget share is
+  reported alongside; no size-normalised test is run.
+- `emb_mr_fresh` and `emb_mr_dw` are the existing runs; reusing them is valid
+  because their code paths are unchanged (below).
+
+### Verification
+
+- `frozen`, `fresh` and `grad`: value and gradient **bit-identical** to the
+  previous implementation, float32 and float64. The existing runs stand.
+- 18 new tests in `tests/test_pair_split.py` (86 in total): exact rule
+  vs autograd; sphere rule only undercounts and coincides on the sphere; equal
+  values; exact additivity; routing differs from both fresh and grad on mixed
+  pairs; limits collapse to fresh / grad with non-trivial gradients (sigma
+  chosen from data -- a first version using sigma = 1e-3 underflowed every
+  weight and passed vacuously); fast path vs plain-autograd reference;
+  diagnostics vs the rule, including an exact single-pair identity; trainer
+  level: pairwise path, logging, all four corners distinct, shared warm-up,
+  and logging proven side-effect free.
+- A gradcheck on the split modes was dropped as conceptually wrong (a routed
+  gradient is by design not the derivative of the value) and replaced by the
+  property that holds: the stopped term equals the routed term exactly.
+- Mutation sweep (harness validated with a harmless-edit control, which was
+  not caught): 15/15 caught -- routing, rule, diagnostics and trainer wiring.
+  Two diagnostic mutations were initially missed and are now pinned.
+- `audit_equivalence.py` 24/24. Routing costs nothing measurable; diagnostics
+  cost about one forward pass per evaluation.
+- **Not verified:** the routed modes on the GPU. They use the same CSR
+  backward that has already run on the RTX 5060 Ti; only `torch.where` and the
+  mask are new.
+
+Logged per evaluation (pairwise arms, new runs only): `kd_frac_repel_exact`,
+`kd_frac_repel_sphere`, `kd_kernel_share_repel`, `kd_kernel_to_attraction`;
+each rebuild event also carries `frac_repel_exact`.

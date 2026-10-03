@@ -1,4 +1,4 @@
-# Handoff — state of the project, 3 Oct 2026
+# Handoff — state of the project, 4 Oct 2026
 
 ## Project
 - MSc dissertation **GCN-MR-VAE** (LightGCN + Manifold Regularization + VAE for
@@ -28,12 +28,13 @@
 
 ## Repository
 - One `Trainer` for every arm; composable loss; Hydra configs; arms `baseline`, `mr_off`,
-  `emb_mr`, `coocc_mr`, `emb_mr_fresh`, `emb_mr_dw`.
-- 68 tests; `audit_equivalence.py` 24/24 against the notebook (CPU, exact). Mutation
-  sweep of 3 Oct 2026 (harness validated with controls): 42/42 guarantees caught; the
-  GPU RNG coercion is untestable on CPU (a no-op there).
+  `emb_mr`, `coocc_mr`, `emb_mr_fresh`, `emb_mr_dw`, `emb_mr_dw_weaken`, `emb_mr_dw_repel`.
+- 86 tests; `audit_equivalence.py` 24/24 against the notebook (CPU, exact). Mutation
+  sweeps (harness validated with controls): 42/42 guarantees on 3 Oct, plus 15/15 for the
+  pair-split code on 4 Oct; the GPU RNG coercion is untestable on CPU (a no-op there).
 - Analysis: `analysis/summarize.py` (groups by run directory, `--dataset`, refuses
-  ambiguous arm names), `analysis/compare_kernel.py` (pre-registered), `analysis/tier0.py`.
+  ambiguous arm names), `analysis/compare_kernel.py` and `analysis/compare_split.py`
+  (pre-registered), `analysis/tier0.py`, `analysis/crossover_check.py` (CPU).
 - On Gowalla the bare name `emb_mr` matches several configurations: use exact tags.
 
 ## Results
@@ -70,8 +71,18 @@ On all three datasets (10/10 seeds), Emb-MR's changes look like an alignment for
 (alignment better, uniformity worse, rank lower), and the differentiable kernel appears to
 move embeddings back along that trade-off; the effects survive L2 normalisation. The
 dw − emb_mr ER gap forms mostly in epochs 100–450 but keeps growing where no net-repulsive
-pairs remain, so net repulsion is not necessary for the effect. To be tested: split the
-kernel gradient by pair type.
+pairs remain, so net repulsion is not necessary for the effect. **That last inference is
+suspended (4 Oct):** it used the logged `frac_beyond_crossover`, a unit-sphere rule that
+can only undercount net-repulsive pairs (exact rule: d2 > 2 sigma^2 |z_i||z_j|; on a
+synthetic model 6.5% logged vs 16.6% exact). Re-measure with `analysis/crossover_check.py`;
+the pair-split experiment below tests the attribution directly.
+
+### In progress — pair-split of the kernel gradient (pre-registered 4 Oct, not yet run)
+Arms `emb_mr_dw_weaken` (kernel gradient only on pairs that stay net-attractive) and
+`emb_mr_dw_repel` (only on net-repulsive pairs), Gowalla, 10 seeds. With the existing
+`emb_mr_fresh` and `emb_mr_dw` they form a 2x2 factorial. Primary: weaken − repel on
+er_table. Analysis: `python -m analysis.compare_split runs`. Full pre-registration in
+`MIGRATION.md`. Expected ~13 h of GPU (about the cost of `emb_mr_dw`).
 
 ## Literature anchors (found by search this session, except where noted)
 - Böhm, Berens & Kobak, JMLR 2022 — attraction–repulsion spectrum; Laplacian Eigenmaps at
@@ -84,11 +95,16 @@ kernel gradient by pair type.
 - Li, Han & Wu 2018; Cai & Wang 2020 — GCN propagation as Laplacian smoothing (§6.3 risk).
   Cited in the qualification text; not re-checked here.
 - Liang et al., WWW 2018 — Mult-VAE^PR: multinomial likelihood, β annealed from 0.
+- Islam & Fleischer, TMLR — per-pair attraction/repulsion "shapes"; one term can be
+  attractive below a distance and repulsive above it, like x·exp(−x/2σ²) here.
+- Cloud et al. 2024 (arXiv 2410.04332) — gradient routing: selective stop-gradient masks,
+  the technique the pair-split uses.
 
 ## Next steps (in order)
-1. **Pair-split kernel gradient** — kernel gradient only on pairs below vs above the
-   crossover; values identical to `fresh`, gradient routed. Attributes the early bulk.
-   Optional dose test via `arm.sigma` (also changes attraction, so not pure).
+1. **Pair-split kernel gradient** — implemented and verified 4 Oct; run it (see "In
+   progress"), and run `analysis/crossover_check.py` on the existing checkpoints.
+   Optional follow-ups if the result is ambiguous: a dose test via `arm.sigma` (also
+   changes attraction, so not pure); a count-matched random-pair control.
 2. **Fast Differentiable Sorting** (§4.1.2's named remedy) — differentiable neighbour
    *selection*. A full differentiable k-NN over 70k+ nodes cannot fit in memory; needs a
    candidate-restricted design.
@@ -117,6 +133,7 @@ kernel gradient by pair type.
 - Chapter 5's MR gains as an MR effect.
 - The alignment/uniformity mechanism as established.
 - The direction of the ER effect as pre-registered (first observed on Gowalla).
+- That no net-repulsive pairs remain late in training: the logged share undercounts.
 
 ## `runs/` map
 - `<ds>/mr_off_w100_K3_d256`, `<ds>/emb_mr_w100_lam1e-05_k20_r50_K3_d256` — corrected gate,
@@ -131,6 +148,8 @@ kernel gradient by pair type.
   replication and decomposition, 3 seeds. (`run_gate_converged.sh` writes to
   `*_converged_w1000` instead, so it cannot collide with these.)
 - `_tier0/` and `tier0.log` — Tier 0 outputs.
+- Planned: `gowalla/emb_mr_dw_{weaken,repel}_w100_lam1e-05_k20_r50_K3_d256` (pair-split,
+  10 seeds); `_crossover_check/` (pre-check output).
 
 ## Standing rules
 Verify claims by running them before stating them; one variable per experiment;

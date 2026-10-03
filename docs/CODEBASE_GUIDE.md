@@ -143,9 +143,11 @@ gcn-mr-vae/
 ├── analysis/
 │   ├── summarize.py      collects results, runs the paired Wilcoxon
 │   ├── compare_kernel.py the pre-registered differentiable-kernel analysis
+│   ├── compare_split.py  the pre-registered pair-split analysis (2×2 factorial)
+│   ├── crossover_check.py net-repulsive share at saved checkpoints, exact vs sphere rule
 │   └── tier0.py          interpretation: trajectory, norms/angles, alignment/uniformity, spectrum
 ├── scripts/            run_gate.sh, run_sweep.sh, run_tests.sh
-├── tests/              68 automated tests (see Part 7 and MIGRATION.md)
+├── tests/              86 automated tests (see Part 7 and MIGRATION.md)
 ├── audit_equivalence.py    proves the port matches the notebook numerically
 ├── docs/               this guide
 ├── MIGRATION.md        cell-by-cell map from the notebook, fix log, audit log
@@ -315,21 +317,29 @@ Registers the `armtag` resolver so run folders are named from hyperparameters, c
 
 The Module-2 results were finalised with ten seeds (2020–2029) and two-sided tests; see `MIGRATION.md`.
 
+This replaces the notebook's Drive inventory, checkpoint-discovery and "recover metrics from filenames" machinery entirely: there is nothing to recover when every run writes its own results.
+
 ## 3.11 `analysis/compare_kernel.py`
 
 The pre-registered analysis for the differentiable-kernel arms. The design is chosen from which arms exist, never from results: *full* (with `emb_mr_fresh`, primary `dw` vs `fresh` on ER) or *dw-only* (primary `dw` vs `emb_mr`). Two-sided exact Wilcoxon; secondary tests Holm-corrected together. `python -m analysis.compare_kernel runs <dataset>`.
 
 ## 3.12 `analysis/tier0.py`
 
-Exploratory interpretation from existing artefacts only — nothing is retrained: the ER-gap trajectory against the share of neighbour pairs past the repulsion crossover; norms versus angles; alignment and uniformity (Wang & Isola 2020; DirectAU); and the singular-value spectrum with stable rank. Because only the validation-selected checkpoint is saved and its epoch can differ between paired runs, every checkpoint comparison is also shown over same-epoch pairs only, with ER at the fixed final epoch as reference. Built-in sanity checks: zero gap at the end of warm-up, recomputed ER against logged ER, ER rebuilt from the spectrum. `python -m analysis.tier0`; outputs to `runs/_tier0/`.
+Exploratory interpretation from existing artefacts only — nothing is retrained: the ER-gap trajectory against the share of neighbour pairs past the repulsion crossover (as logged by the unit-sphere rule, which undercounts — see §3.14); norms versus angles; alignment and uniformity (Wang & Isola 2020; DirectAU); and the singular-value spectrum with stable rank. Because only the validation-selected checkpoint is saved and its epoch can differ between paired runs, every checkpoint comparison is also shown over same-epoch pairs only, with ER at the fixed final epoch as reference. Built-in sanity checks: zero gap at the end of warm-up, recomputed ER against logged ER, ER rebuilt from the spectrum. `python -m analysis.tier0`; outputs to `runs/_tier0/`.
 
-This replaces the notebook's Drive inventory, checkpoint-discovery and "recover metrics from filenames" machinery entirely: there is nothing to recover when every run writes its own results.
+## 3.13 `analysis/compare_split.py`
 
-## 3.11 `scripts/`
+The pre-registered analysis for the pair-split of the kernel gradient. `emb_mr_fresh`, `emb_mr_dw_weaken`, `emb_mr_dw_repel` and `emb_mr_dw` form a 2×2 factorial (kernel gradient on pairs that stay net-attractive: off/on × on net-repulsive pairs: off/on). Primary test `weaken − repel` on ER_table; eleven secondary tests Holm-corrected together, including the interaction `dw − weaken − repel + fresh`; descriptive shares of `dw`'s ER gain and the net-repulsive share per MR window. `python -m analysis.compare_split runs [dataset]`.
+
+## 3.14 `analysis/crossover_check.py`
+
+Re-measures, from the saved validation-selected checkpoints, how many neighbour pairs are net-repulsive under the exact rule versus the unit-sphere rule that runs before 4 Oct 2026 logged as `frac_beyond_crossover`. The k-NN graph is rebuilt from each checkpoint, so it approximates the graph in use at that epoch. CPU, nothing retrained. `python -m analysis.crossover_check`; outputs to `runs/_crossover_check/`.
+
+## 3.15 `scripts/`
 
 `run_gate.sh` launches the September gate (two arms × five seeds on Gowalla) and summarises. `run_sweep.sh` does all three datasets. `run_tests.sh` is `pytest tests -q`. All accept extra Hydra overrides as arguments.
 
-## 3.12 `tests/` and `audit_equivalence.py`
+## 3.16 `tests/` and `audit_equivalence.py`
 
 Described in Part 7.
 
@@ -350,6 +360,8 @@ An **arm** is one experimental condition. The four defined arms:
 | `emb_mr` | W | BPR + MR | k-NN on embeddings, rebuilt every 50 | the proposed method (H2, H3) |
 | `coocc_mr` | W | BPR + MR | fixed, from `R` | the redundancy check (§6.3) |
 | `emb_mr_fresh` | W | BPR + MR | as `emb_mr`, kernel weights recomputed every batch, detached | control for `emb_mr_dw` |
+| `emb_mr_dw_weaken` | W | BPR + MR | as `emb_mr_dw`, but the kernel gradient only on pairs that stay net-attractive | pair-split corner |
+| `emb_mr_dw_repel` | W | BPR + MR | as `emb_mr_dw`, but the kernel gradient only on net-repulsive pairs | pair-split corner |
 | `emb_mr_dw` | W | BPR + MR | as `emb_mr`, kernel weights recomputed every batch, **differentiable** | differentiable-kernel experiment |
 
 The primary comparison is `emb_mr` against `mr_off`. They share `W`, `E`, the reference snapshot, and — when resumed from the same warm-start file — the exact model, optimiser and random state at epoch W. They differ in one config value. Any difference in outcome is attributable to the manifold term.

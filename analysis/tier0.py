@@ -8,8 +8,12 @@ A. ER-gap trajectory vs the crossover share (history.json).
    Per seed, gap(t) = ER_table(emb_mr_dw) - ER_table(emb_mr) at every
    evaluation. The MR phase is split into early / mid / late windows; for each
    window we report how much the gap grew and the mean share of neighbour
-   pairs past the repulsion crossover. Growth in a window where that share is
-   ~0 cannot come from net-repulsive pairs (exact on the unit sphere only).
+   pairs past the repulsion crossover, as logged at each rebuild by the
+   unit-sphere rule (1 - cos > sigma^2). CORRECTION (4 Oct 2026): off the unit
+   sphere that rule can only UNDERCOUNT net-repulsive pairs (the exact rule is
+   d2 > 2 sigma^2 |z_i||z_j|; see mr_layer.net_repulsive), so a share of ~0
+   here does NOT show that no net-repulsive pairs remain.
+   analysis/crossover_check.py re-measures the exact share.
    Sanity check: the gap must be 0 at epoch W -- both arms share the warm-up.
 
 IMPORTANT for B-D: only the validation-selected checkpoint (best.pt) is saved,
@@ -225,10 +229,10 @@ def main(argv=None):
         if tr:
             print(f"A. ER_table gap (dw - emb_mr) over the MR phase, W={tr['W']}, E={tr['E']}")
             print(f"   sanity: gap at epoch W = {tr['start_gap_maxabs']:.2e} (shared warm-up, must be ~0)")
-            print(f"   {'window':6s} {'epochs':>11s} {'gap growth':>11s} {'seeds +':>8s} {'crossover share':>16s}")
+            print(f"   {'window':6s} {'epochs':>11s} {'gap growth':>11s} {'seeds +':>8s} {'sphere-rule share':>18s}")
             for r in tr["windows"]:
                 print(f"   {r['window']:6s} {r['start']:>4d}-{r['end']:<6d} {r['growth_mean']:>+11.4f} "
-                      f"{r['n_pos']:>4d}/{r['n']:<3d} {100 * r['crossover_mean']:>15.3f}%")
+                      f"{r['n_pos']:>4d}/{r['n']:<3d} {100 * r['crossover_mean']:>17.3f}%")
             print(f"   final gap {tr['final_gap']:+.4f}; share accrued per window: " + ", ".join(
                 f"{r['window']} {100 * r['growth_mean'] / tr['final_gap']:.0f}%" for r in tr["windows"]))
             curves += [dict(dataset=ds, epoch=e, gap=g) for e, g in tr["curve"]]

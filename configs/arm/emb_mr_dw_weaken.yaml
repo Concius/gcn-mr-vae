@@ -1,0 +1,15 @@
+# @package arm
+# Pair-split of emb_mr_dw (pre-registered 4 Oct 2026). Identical to emb_mr_dw
+# except that the gradient through the kernel weights is kept only on pairs
+# whose net angular force stays ATTRACTIVE (the kernel merely weakens it), and
+# stopped on net-repulsive pairs. Same loss value as emb_mr_dw and emb_mr_fresh.
+name: emb_mr_dw_weaken
+warmup_epochs: 100
+lambda_manifold: 1.0e-5
+laplacian: embeddings
+k_neighbors: 20
+rebuild_every: 50
+lambda_scale: none
+knn_backend: torch
+sigma: null
+kernel_weights: grad_weaken

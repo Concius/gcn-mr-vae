@@ -136,16 +136,18 @@ class KnnGraph:
     ``w0``    (n, k) Gaussian kernel weights computed at build time -- exactly
               the values the sparse Laplacian path would use.
     ``sigma`` median-heuristic kernel width, fixed until the next rebuild.
-    ``frac_beyond_crossover`` share of neighbour pairs whose squared kernel
-              distance exceeds 2 sigma^2 at build time -- where, in ``grad``
-              mode, the per-pair force turns repulsive. Exact for embeddings on
-              the unit sphere; an approximation otherwise, because the kernel
-              uses cosine distance while the energy uses Euclidean distance.
+    ``frac_beyond_crossover`` share of neighbour pairs with 1 - cos > sigma^2
+              at build time: the unit-sphere form of the net-repulsion rule.
+              Off the sphere it can only UNDERCOUNT (see ``net_repulsive``);
+              kept because earlier runs logged it.
+    ``frac_repel_exact`` share of pairs that are net-repulsive in ``grad`` mode
+              under the exact rule, at build time.
     """
     idx: torch.Tensor
     w0: torch.Tensor
     sigma: float
     frac_beyond_crossover: float = float("nan")
+    frac_repel_exact: float = float("nan")
     _csr: tuple | None = field(default=None, init=False, repr=False, compare=False)
 
     def csr_structure(self) -> tuple:
@@ -176,10 +178,12 @@ def build_embedding_knn(emb: torch.Tensor, k: int = 20, sigma: float | None = No
                  w0=torch.from_numpy(np.ascontiguousarray(w)).to(device),
                  sigma=float(sigma),
                  frac_beyond_crossover=float(np.mean(2.0 * d > 2.0 * sigma ** 2)))
+    with torch.no_grad():
+        g.frac_repel_exact = float(kernel_force_diagnostics(emb.to(device), g)["frac_repel_exact"])
     if verbose:
         print(f"    kNN graph (n={emb.shape[0]:,}, k={k}, {backend}) pairs={g.idx.numel():,} "
-              f"sigma={sigma:.4f} beyond-crossover={100*g.frac_beyond_crossover:.2f}% "
-              f"in {time.time()-t0:.1f}s")
+              f"sigma={sigma:.4f} net-repulsive={100*g.frac_repel_exact:.2f}% "
+              f"(sphere rule {100*g.frac_beyond_crossover:.2f}%) in {time.time()-t0:.1f}s")
     return g
 
 
@@ -212,7 +216,8 @@ def manifold_loss(Z: torch.Tensor, L: torch.Tensor) -> torch.Tensor:
     return (Z * torch.sparse.mm(L, Z)).sum() / Z.shape[0]
 
 
-KERNEL_MODES = ("frozen", "fresh", "grad")
+KERNEL_MODES = ("frozen", "fresh", "grad", "grad_weaken", "grad_repel")
+SPLIT_MODES = ("grad_weaken", "grad_repel")
 
 
 def csr_structure(idx: torch.Tensor) -> tuple:
@@ -294,7 +299,74 @@ def _energy_from_dots(Z: torch.Tensor, g: KnnGraph, mode: str, dots: torch.Tenso
         w = torch.exp(-(2.0 * (1.0 - cos)) / (2.0 * g.sigma ** 2))
         if mode == "fresh":
             w = w.detach()
+        elif mode in SPLIT_MODES:
+            # Same value as `grad` everywhere; the gradient through w is kept
+            # only on the routed pairs and stopped on the rest (which therefore
+            # behave exactly as in `fresh`).
+            repel = net_repulsive(d2.detach(), nrm.detach(), g)
+            route = repel if mode == "grad_repel" else ~repel
+            w = torch.where(route, w, w.detach())
     return 0.5 * (w * d2).sum() / n
+
+
+def net_repulsive(d2: torch.Tensor, nrm: torch.Tensor, g: KnnGraph) -> torch.Tensor:
+    """Pairs whose own net angular force is repulsive in ``grad`` mode.
+
+    Per pair, E = w(cos) ||z_i - z_j||^2 with w = exp(-(1 - cos)/sigma^2).
+    The kernel term d2 * grad(w) is purely tangential and pushes the pair apart
+    in angle; the tangential part of the attraction w * grad(d2) pulls it
+    together. On z_i their coefficients along the direction towards z_j are
+    d2 w / (sigma^2 |z_i|) (away) and 2 w |z_j| (towards), so the pair is
+    net-repulsive iff
+
+        d2 > 2 sigma^2 |z_i| |z_j|,
+
+    a condition symmetric in i and j, so both endpoints agree. Dividing by
+    |z_i||z_j| gives 2(1 - cos) + (r + 1/r - 2) > 2 sigma^2 with r = |z_i|/|z_j|:
+    on the unit sphere this is 1 - cos > sigma^2 (``frac_beyond_crossover``),
+    and off it the extra term is >= 0, so the sphere rule only undercounts.
+
+    This is the sign of the pair term's force in isolation. A node's actual
+    motion also depends on its other pairs, on BPR, on back-propagation through
+    LightGCN, and on Adam.
+    """
+    return d2 > 2.0 * g.sigma ** 2 * nrm.unsqueeze(1) * nrm[g.idx]
+
+
+@torch.no_grad()
+def kernel_force_diagnostics(Z: torch.Tensor, g: KnnGraph) -> dict:
+    """Descriptive force budget for the current embeddings and graph.
+
+    Per pair, tangential magnitudes summed over both endpoints (the common
+    factor 0.5/n is dropped; it cancels in every ratio reported):
+        kernel    K = d2 * w * sin(theta) * (1/|z_i| + 1/|z_j|) / sigma^2
+        attraction A = 2 * w * sin(theta) * (|z_i| + |z_j|)
+    These are sums of per-pair magnitudes, not the norm of the net gradient.
+
+    Returns shares of pairs that are net-repulsive under the exact and the
+    unit-sphere rule, the share of the kernel budget carried by net-repulsive
+    pairs, and the overall kernel / attraction ratio.
+    """
+    dots = knn_dots(Z, g.idx, struct=g.csr_structure())
+    sq = (Z * Z).sum(1)
+    d2 = (sq.unsqueeze(1) + sq[g.idx] - 2.0 * dots).clamp_min(0.0)
+    nrm = sq.clamp_min(1e-16).sqrt()
+    ni, nj = nrm.unsqueeze(1), nrm[g.idx]
+    cos = (dots / (ni * nj)).clamp(-1.0, 1.0)
+    s2 = g.sigma ** 2
+    w = torch.exp(-(1.0 - cos) / s2)
+    sin = (1.0 - cos * cos).clamp_min(0.0).sqrt()
+    K = d2 * w * sin * (1.0 / ni + 1.0 / nj) / s2
+    A = 2.0 * w * sin * (ni + nj)
+    repel = net_repulsive(d2, nrm, g)
+    k_tot = K.sum()
+    return {
+        "frac_repel_exact": float(repel.float().mean()),
+        "frac_repel_sphere": float(((1.0 - cos) > s2).float().mean()),
+        # undefined (not zero) when the kernel force vanishes, e.g. weights underflow
+        "kernel_share_repel": float(K[repel].sum() / k_tot) if k_tot > 0 else float("nan"),
+        "kernel_to_attraction": float(k_tot / A.sum()) if A.sum() > 0 else float("nan"),
+    }
 
 
 def pairwise_manifold_loss(Z: torch.Tensor, g: KnnGraph, mode: str) -> torch.Tensor:
@@ -313,6 +385,14 @@ def pairwise_manifold_loss(Z: torch.Tensor, g: KnnGraph, mode: str) -> torch.Ten
       * ``fresh``  -- w_ij recomputed from the current Z, then detached.
       * ``grad``   -- w_ij recomputed from the current Z and kept in the graph,
                       so the gradient also flows through the kernel.
+      * ``grad_weaken`` / ``grad_repel`` -- same value as ``grad``, but the
+                      gradient through the kernel is kept only on pairs that
+                      are not / are net-repulsive (:func:`net_repulsive`,
+                      re-evaluated every call) and stopped on the others.
+                      ``grad_weaken + grad_repel - fresh == grad`` for the
+                      gradient, exactly. Like ``fresh``, a routed gradient is
+                      not the derivative of the reported value: it descends a
+                      surrogate in which w is held fixed on unrouted pairs.
     Recomputed weights use the build-time formula: cosine distance on the
     embeddings, w = exp(-2(1 - cos)/(2 sigma^2)), with ``g.sigma`` held fixed.
 
