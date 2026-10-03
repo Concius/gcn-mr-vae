@@ -1,5 +1,17 @@
 # Module 3 (VAE) — readiness assessment and roadmap
 
+> **Status, 3 Oct 2026.** This roadmap was written on 11 Sep, before the
+> corrected Module-2 results. Its engineering plan (seams B2/B3, synthetic
+> first, KL logging for H4) still stands. What changed: Module 2 is finished
+> enough to start Module 3 (see `docs/HANDOFF.md` and `MIGRATION.md`); the VAE
+> is **Mult-VAE^PR** (Liang et al., WWW 2018 — not part of PyTorch), built
+> first as the standalone VAE-CF baseline and then as the template for
+> GCN-MR-VAE; it must be evaluated on this repo's split (held-out items of
+> known users), not Liang's held-out-user protocol; and the encoder-input
+> decision (raw interaction vector vs LightGCN/MR user embedding) is still open.
+> Given MR's measured contraction, H4 should be designed so either outcome is a
+> finding, with 10 seeds and budget-matched arms.
+
 Written 11 Sep 2026, against the qualification text of 12 Aug 2026 (§4.2.2,
 §4.2.3, §6.3, Tabela 6) and the repo at commit `47b7d42` + post-port audit.
 

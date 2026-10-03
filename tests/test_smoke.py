@@ -14,7 +14,7 @@ from src.data.dataset import InteractionDataset
 from src.data.synthetic import make_synthetic
 from src.models.lightgcn import LightGCN
 from src.trainer import Trainer
-import src.train  # registers the armtag resolver
+import src.train  # noqa: F401  registers the armtag resolver  # registers the armtag resolver
 from src.utils import set_seed
 
 
@@ -148,7 +148,6 @@ def test_selection_window_is_symmetric(synth, tmp_path):
     a standalone arm could select from the shared warm-up prefix while a
     resumed arm could not — strictly more candidates for the control.
     """
-    import json
     ca = _cfg(synth, "mr_off", tmp_path / "a")
     ca.eval.every = 1
     ca.warmstart.save = True
@@ -263,7 +262,7 @@ def test_resume_trains_exactly_the_remaining_budget(synth, tmp_path):
 
     cb = _cfg(synth, "emb_mr", tmp_path / "mr")
     cb.warmstart.load = str(Path(ca.paths.run_dir) / f"warmstart_ep{W}.pt")
-    res = run(cb)
+    run(cb)
     assert counts["emb_mr"] == E - W, (
         f"resumed arm trained {counts['emb_mr']} epochs; expected {E - W} "
         f"(E={E}, W={W}). Training E epochs on top of a warm-start is exactly "

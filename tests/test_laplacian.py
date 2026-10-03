@@ -6,7 +6,7 @@ import pytest
 
 from src.models.mr_layer import (build_embedding_laplacian, build_cooccurrence_laplacian,
                                  knn_cosine_torch, knn_cosine_sklearn, manifold_loss,
-                                 laplacian_from_knn, gaussian_weights)
+                                 gaussian_weights)
 
 
 def _rand_emb(n=200, d=16, seed=0):
@@ -42,7 +42,6 @@ def test_manifold_loss_equals_trace_form():
 
 
 def test_cooccurrence_block_diagonal():
-    rng = np.random.default_rng(0)
     R = sp.random(60, 40, density=0.1, format="csr", random_state=0)
     R.data[:] = 1.0
     L = build_cooccurrence_laplacian(R, k=3, device=torch.device("cpu"), verbose=False).to_dense()

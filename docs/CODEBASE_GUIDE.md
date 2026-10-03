@@ -140,9 +140,12 @@ gcn-mr-vae/
 │   ├── trainer.py        the training loop — one class for every arm
 │   ├── train.py          the command-line entry point
 │   └── utils.py          seeding, device, JSON helpers, RNG state capture
-├── analysis/summarize.py   collects results, runs the paired Wilcoxon
+├── analysis/
+│   ├── summarize.py      collects results, runs the paired Wilcoxon
+│   ├── compare_kernel.py the pre-registered differentiable-kernel analysis
+│   └── tier0.py          interpretation: trajectory, norms/angles, alignment/uniformity, spectrum
 ├── scripts/            run_gate.sh, run_sweep.sh, run_tests.sh
-├── tests/              29 automated tests (see Part 7)
+├── tests/              68 automated tests (see Part 7 and MIGRATION.md)
 ├── audit_equivalence.py    proves the port matches the notebook numerically
 ├── docs/               this guide
 ├── MIGRATION.md        cell-by-cell map from the notebook, fix log, audit log
@@ -308,7 +311,17 @@ Registers the `armtag` resolver so run folders are named from hyperparameters, c
 
 ## 3.10 `analysis/summarize.py`
 
-`collect_results(runs_root)` walks every `results.json` into a pandas table (one row per run) with the test metrics, validation metrics and geometry flattened into columns. `summary_table` groups by dataset and arm tag, reporting mean, standard deviation and n. `paired_wilcoxon(df, arm_a, arm_b, metric)` pairs runs by seed within each dataset, tests `arm_a > arm_b` one-sided, and applies Holm–Bonferroni across datasets. The command line does all three: `python -m analysis.summarize runs --a emb_mr --b mr_off --metric recall@20`.
+`collect_results(runs_root)` walks every `results.json` into a pandas table (one row per run) with the test metrics, validation metrics and geometry flattened into columns. `summary_table` groups by dataset and arm tag, reporting mean, standard deviation and n. `paired_wilcoxon(df, arm_a, arm_b, metric)` pairs runs by seed within each dataset, tests `arm_a > arm_b` one-sided, and applies Holm–Bonferroni across datasets. The command line does all three: `python -m analysis.summarize runs --a emb_mr --b mr_off --metric recall@20`. Runs are grouped by the directory they live in, so a `paths.run_dir` override keeps them apart; `--dataset` restricts to one dataset; and a bare arm name that matches several configurations is refused with the candidate tags listed, rather than pooled.
+
+The Module-2 results were finalised with ten seeds (2020–2029) and two-sided tests; see `MIGRATION.md`.
+
+## 3.11 `analysis/compare_kernel.py`
+
+The pre-registered analysis for the differentiable-kernel arms. The design is chosen from which arms exist, never from results: *full* (with `emb_mr_fresh`, primary `dw` vs `fresh` on ER) or *dw-only* (primary `dw` vs `emb_mr`). Two-sided exact Wilcoxon; secondary tests Holm-corrected together. `python -m analysis.compare_kernel runs <dataset>`.
+
+## 3.12 `analysis/tier0.py`
+
+Exploratory interpretation from existing artefacts only — nothing is retrained: the ER-gap trajectory against the share of neighbour pairs past the repulsion crossover; norms versus angles; alignment and uniformity (Wang & Isola 2020; DirectAU); and the singular-value spectrum with stable rank. Because only the validation-selected checkpoint is saved and its epoch can differ between paired runs, every checkpoint comparison is also shown over same-epoch pairs only, with ER at the fixed final epoch as reference. Built-in sanity checks: zero gap at the end of warm-up, recomputed ER against logged ER, ER rebuilt from the spectrum. `python -m analysis.tier0`; outputs to `runs/_tier0/`.
 
 This replaces the notebook's Drive inventory, checkpoint-discovery and "recover metrics from filenames" machinery entirely: there is nothing to recover when every run writes its own results.
 
@@ -387,7 +400,7 @@ The gate should change only the protocol. Two knobs exist that change the *metho
 ## 4.6 Symmetric checkpoint selection
 
 Epochs before W are the *shared prefix*: two arms branching from the same
-warm-start are bit-identical there. A checkpoint drawn from the prefix
+warm-start are identical there (bit-identical on CPU; on the RTX 5060 Ti only to ~1e-6 relative, because CUDA sparse matmul is non-deterministic (`deterministic: false`)). A checkpoint drawn from the prefix
 therefore says nothing about the treatment. More importantly, a resumed arm
 never trained those epochs and cannot select from them — so letting a
 standalone arm do so would hand the control strictly more candidates.
@@ -477,8 +490,9 @@ python -m analysis.summarize runs --a emb_mr --b mr_off --metric recall@20
 
 **No warm-start files are needed.** With the same seed both arms have the same
 initialisation and the same negative-sampling stream, and epochs 0–99 are
-BPR-only for both, so the warm-up is bit-identical by construction — verified
-on real Gowalla data, not assumed (`test_mr_off_and_emb_mr_share_warmup`).
+BPR-only for both, so the warm-up is identical by construction — bit-identical
+on CPU (verified on real Gowalla, `test_mr_off_and_emb_mr_share_warmup`); on the
+GPU it agrees to ~1e-6 relative, measured in the Tier 0 analysis.
 About 25 min (`mr_off`) plus 37 min (`emb_mr`) per seed, ≈ 5 hours for five
 seeds.
 
@@ -843,9 +857,9 @@ python -m src.train -m dataset=gowalla arm=mr_off,emb_mr seed=2020,2021,2022,202
 # the gate (see §5.3)
 bash scripts/run_gate.sh
 
-# shared warm-up
-... arm=mr_off warmstart.save=true epochs=2000 arm.warmup_epochs=1000
-... arm=emb_mr 'warmstart.load=runs/<ds>/mr_off_w1000_K3_d256/seed${seed}/warmstart_ep1000.pt' epochs=2000 arm.warmup_epochs=1000
+# shared warm-up (W=1000): use the script, which writes to its own folders --
+# runs/gowalla/mr_off_w1000_K3_d256 already holds the notebook-protocol replication
+DATASET=gowalla bash scripts/run_gate_converged.sh
 
 # results
 python -m analysis.summarize runs [--a emb_mr --b mr_off --metric recall@20]

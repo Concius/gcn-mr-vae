@@ -81,9 +81,13 @@ def main(root="runs", ds="gowalla"):
             print(f"  skipping {a} vs {b}: only {len(seeds)} paired seeds"); continue
         for sec, m in METRICS:
             d = np.array([data[a][s][sec][m] - data[b][s][sec][m] for s in seeds])
+            try:   # identical values in every pair give no evidence of a difference
+                p = 1.0 if np.allclose(d, 0) else float(wilcoxon(d, alternative="two-sided").pvalue)
+            except ValueError:
+                p = 1.0
             rows.append(dict(cmp=f"{a} - {b}", m=m, n=len(seeds), mean=d.mean(),
                              lo=int((d < 0).sum()), hi=int((d > 0).sum()),
-                             p=wilcoxon(d, alternative="two-sided").pvalue,
+                             p=p,
                              primary=(a, b, m) == primary))
     sec_idx = [i for i, r in enumerate(rows) if not r["primary"]]
     for i, h in zip(sec_idx, holm([rows[i]["p"] for i in sec_idx])):

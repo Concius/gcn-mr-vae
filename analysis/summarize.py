@@ -93,7 +93,7 @@ def paired_wilcoxon(df: pd.DataFrame, arm_a: str, arm_b: str, metric: str = "tes
         x, y = a.loc[seeds].values, b.loc[seeds].values
         try:
             stat, p = wilcoxon(x, y, alternative=alternative)
-        except ValueError as e:      # all differences zero
+        except ValueError:           # all differences zero
             stat, p = np.nan, 1.0
         out.append({"dataset": ds, "n": len(seeds),
                     f"mean_{arm_a}": x.mean(), f"mean_{arm_b}": y.mean(),
@@ -157,7 +157,12 @@ def main(argv=None):
     pd.set_option("display.width", 200, "display.max_columns", 50)
     print(summary_table(df).round(4))
     print()
-    print(paired_wilcoxon(df, a.a, a.b, f"test_{a.metric}").round(5))
+    try:
+        print(paired_wilcoxon(df, a.a, a.b, f"test_{a.metric}").round(5))
+    except ValueError as err:
+        # An ambiguous bare arm name is a usage message, not a crash: the table
+        # above is still valid, and the message lists the exact tags to pass.
+        print(f"\nNo paired test run -- {err}")
 
 
 if __name__ == "__main__":

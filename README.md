@@ -77,7 +77,7 @@ influences selection. Validation items are excluded from the adjacency.
 * `eval.test_each_eval=false` halves evaluation time (test only at the end).
 * `warmstart.save=true` on the `mr_off` run writes `warmstart_ep100.pt`
   (model + optimizer + RNG); `warmstart.load=<path>` on `emb_mr` resumes from it
-  so both arms share a bit-identical prefix and the warm-up is trained once.
+  so both arms share an identical prefix (bit-identical on CPU; on the RTX 5060 Ti only to ~1e-6 relative, because CUDA sparse matmul is non-deterministic (`deterministic: false`)) and the warm-up is trained once.
 * `eval.select_split=test` reproduces the notebook's selection-on-test. It
   prints a warning. Do not report numbers produced this way.
 

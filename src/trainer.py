@@ -128,7 +128,8 @@ class Trainer:
         self.patience = int(ev.patience_evals)
         # Checkpoint selection window. Epochs [0, W) are the shared prefix: for a
         # control and a treatment arm branching from the same warm-start they are
-        # bit-identical there, so a checkpoint from the prefix says nothing about
+        # identical there (bit-for-bit on CPU, to float precision on GPU), so a
+        # checkpoint from the prefix says nothing about
         # the treatment. A *resumed* arm cannot select from the prefix at all
         # (it never trained those epochs), so allowing a standalone arm to do so
         # would give the control strictly more candidates than the treatment.
@@ -463,7 +464,6 @@ class Trainer:
         self.model.load_state_dict(ck["model"])
         self.model.eval()
         au, ai = self.model.computer()
-        g = self.cfg.geometry
         scorer = self.scorer(au, ai)
         val = evaluate(scorer, self.ds, "val", self.topks, self.eval_bs, self.device)
         test = evaluate(scorer, self.ds, "test", self.topks, self.eval_bs, self.device)

@@ -113,6 +113,8 @@ def trajectory(root, ds, T):
         cross += [(h["epoch"], h["frac_beyond_crossover"]) for h in ha
                   if h.get("event") == "laplacian_built" and "frac_beyond_crossover" in h]
     common = sorted(set.intersection(*(set(g) for g in gaps.values())))
+    if not common:      # e.g. geometry.er_each_eval was off: no per-epoch ER logged
+        return None
     bounds = [nearest(common, W + f * (E - W)) for f in WINDOW_FRACTIONS]
     rows = []
     for name, (lo, hi) in zip(WINDOW_NAMES, zip(bounds[:-1], bounds[1:])):
@@ -231,14 +233,23 @@ def main(argv=None):
                 f"{r['window']} {100 * r['growth_mean'] / tr['final_gap']:.0f}%" for r in tr["windows"]))
             curves += [dict(dataset=ds, epoch=e, gap=g) for e, g in tr["curve"]]
         # ---------------- B, C, D
+        all_runs = {arm: runs_of(a.runs, ds, T[arm]) for arm in ARMS}
+        splits = {tuple(json.load(open(r / "results.json"))["config"]["split"][k]
+                        for k in ("val_frac", "split_seed", "min_train"))
+                  for runs in all_runs.values() for r in runs.values()}
+        if len(splits) > 1:
+            raise ValueError(f"{ds}: runs were trained on different splits {sorted(splits)}; "
+                             "propagation would not match training")
         data = graph = None
         per_arm = {}
         for arm in ARMS:
-            runs = runs_of(a.runs, ds, T[arm])
+            runs = all_runs[arm]
             if not runs:
                 continue
             if data is None:
-                data = InteractionDataset(ds, root=a.data, verbose=False)
+                vf, ss, mt = next(iter(splits))
+                data = InteractionDataset(ds, root=a.data, val_frac=float(vf), split_seed=int(ss),
+                                          min_train=int(mt), verbose=False)
                 graph = data.sparse_graph(dev)
             per_arm[arm] = {}
             t0 = time.time()
@@ -260,7 +271,7 @@ def main(argv=None):
         for arm, runs in per_arm.items():
             be = [m["best_epoch"] for m in runs.values()]
             print(f"      {arm:14s} {min(be):>5d} {int(np.median(be)):>6d} {max(be):>5d}")
-        print(f"\n   mean over seeds   " + "".join(f"{arm:>14s}" for arm in per_arm))
+        print("\n   mean over seeds   " + "".join(f"{arm:>14s}" for arm in per_arm))
         for k in METRICS + FINAL_METRICS:
             print(f"   {k:20s}" + "".join(f"{np.mean([m[k] for m in per_arm[arm].values()]):>14.4f}"
                                           for arm in per_arm))
@@ -275,7 +286,7 @@ def main(argv=None):
             for k in METRICS:
                 print(f"      {k:20s} {fmt(*paired(per_arm[x], per_arm[y], k))}   "
                       f"{fmt(*paired(per_arm[x], per_arm[y], k, same_epoch_only=True))}")
-            print(f"      fixed final epoch, all pairs:")
+            print("      fixed final epoch, all pairs:")
             for k in FINAL_METRICS:
                 print(f"      {k:20s} {fmt(*paired(per_arm[x], per_arm[y], k))}")
 

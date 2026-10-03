@@ -650,3 +650,100 @@ trainer/loss wiring, 7 in the custom backward and its CSR structure.
 `emb_mr_dw` vs `emb_mr_fresh` on er_table (uncorrected, single test);
 everything else Holm-corrected together. Verified on a replica with planted
 effects.
+
+### Extension to Yelp2018 and Amazon-Book (pre-registered 29 Sep 2026, before running)
+
+Gowalla result (full design, 10 seeds): emb_mr_dw raises ER over emb_mr_fresh by
++0.620 in 10/10 seeds (p = 0.002); fresh vs emb_mr accounts for only +0.024.
+MR's ER gap to the control shrinks from -0.963 (emb_mr) to -0.319 (emb_mr_dw);
+np_ref gap shrinks ~40%; Gini and tail coverage are unchanged.
+
+For Yelp2018 and Amazon-Book only emb_mr_dw is run (no emb_mr_fresh), on the
+evidence that freshness was ~4% of the effect on Gowalla. That transfer is an
+assumption and is stated as such. `analysis/compare_kernel.py` selects the
+design from which arms exist, never from results:
+
+- **full** (emb_mr_fresh present): primary dw vs fresh on er_table; secondary
+  family unchanged from the Gowalla analysis (14 tests).
+- **dw-only**: primary dw vs emb_mr on er_table (includes the small freshness
+  component); secondary dw vs emb_mr (other metrics) and dw vs mr_off (9 tests).
+
+Usage: `python -m analysis.compare_kernel runs <dataset>`.
+
+## Tier 0 interpretation analysis (3 Oct 2026)
+
+`analysis/tier0.py` — exploratory, from existing artefacts only. Results are a
+**working hypothesis**, not a conclusion: the open experiments (pair-split
+kernel gradient, Fast Differentiable Sorting) bear directly on them, and every
+p-value here is uncorrected.
+
+**Caught during testing.** Only the validation-selected checkpoint is saved,
+and its epoch can differ between paired runs. On the synthetic replica that
+reversed a sign. Every checkpoint comparison is therefore reported over all
+pairs *and* over same-epoch pairs only, with ER at the fixed final epoch as
+reference. On the real runs the three columns agree in sign everywhere.
+
+**Observed (10/10 seeds, all three datasets).** Emb-MR changes look like an
+alignment force: alignment better, uniformity worse, rank lower. The
+differentiable kernel moves embeddings back along that trade-off. Effects
+survive L2 normalisation (angular), as expected from the kernel-gradient term
+being purely rotational at the propagated level. The dw - emb_mr ER gap forms
+73-93% in epochs 100-450, but keeps growing in all seeds where no net-repulsive
+pairs remain, so net repulsion is not necessary for the effect. Attribution of
+the early bulk is open: split the kernel gradient by pair type.
+
+**Runtime.** ~1-3 s per checkpoint on the RTX 5060 Ti desktop (CPU), about
+2.5 min in total. The 49 s measured during development was a one-core sandbox.
+
+**Correction: determinism.** Earlier entries describe the shared warm-up of two
+arms as "bit-identical by construction" and the pipeline as bit-deterministic.
+That was verified on CPU only. On the RTX 5060 Ti the end-of-warm-up ER of two
+arms differs by 2-3e-4 (out of ~200), i.e. reproducible to ~1e-6 relative --
+consistent with `deterministic: false` and non-deterministic CUDA sparse
+matmul. No conclusion changes (effects are 0.2-1.4 in ER), but "bit-identical"
+must not be claimed for GPU runs. The notebook-equivalence results
+(`audit_equivalence.py`, 24/24) are exact and unaffected: they run on CPU.
+
+## Second full comb before the hand-off (3 Oct 2026)
+
+Static analysis, config wiring in both directions (including `.get()` reads),
+a line-by-line read of everything added since the last audit, every script run
+end to end, and a fresh mutation sweep.
+
+**My mutation harness was wrong at first.** It counted any output containing
+"error" as a caught mutation, and PyTorch's warning text ("Memory errors (e.g.
+SEGFAULT)") appears in every passing run, so everything showed CAUGHT. Spotted
+because a mutation known to be uncatchable on CPU (the GPU RNG coercion) was
+reported caught. The harness now uses pytest's exit code and was validated with
+controls: a harmless edit and the CPU no-op are not caught, a real bug is. Earlier
+sweeps in this log used a different check and are unaffected.
+
+**Six guarantees had no automated test** -- each verified by hand when built:
+resume rejecting a different architecture; `weights_only` resumes still
+validating; `summarize` refusing an ambiguous arm name and repeated seeds; Holm
+counting only tested rows; the clobber guard. `tests/test_guards.py` adds a test
+for each, and each was confirmed to fail when its guard is removed. 68 tests.
+
+**Differentiable-kernel mutations re-run on the current code.** The original 20
+predated the fast-backward rewrite, so some patterns targeted code that no longer
+exists. Re-run against current code: 20/20 caught. Project total: 42/42, plus the
+GPU RNG coercion (untestable on CPU).
+
+**Scripts.** `run_gate_converged.sh` would have collided with the notebook-protocol
+replication in `runs/gowalla/mr_off_w1000_K3_d256` (different protocol; the clobber
+guard would refuse). It now writes to `*_converged_w1000`; tested end to end on
+synthetic data with epochs scaled down (6 runs, 3 resumed, exit 0). The guide's
+cheat-sheet had the same colliding path and now points to the script.
+`run_sweep.sh` and the converged script ended with a bare `summarize` call, which
+is ambiguous on Gowalla; `summarize` now prints the ambiguity as a message after
+the table instead of a traceback.
+
+**Analysis scripts.** `tier0.py` built datasets with default split settings; it
+now reads the split from the runs and refuses if they disagree (verified: refuses
+a mixed-split replica; results on a same-split replica unchanged to 4 decimals).
+`compare_kernel.py` now gives p = 1 for a metric identical in every pair instead
+of risking an exception or a NaN in Holm.
+
+**Clean-ups.** Dead variables and unused imports removed; pyflakes is clean apart
+from one intentional side-effect import (`import src.train`, which registers the
+run-folder resolver). Config wiring verified complete in both directions.

@@ -1,7 +1,6 @@
 """The scorer seam: evaluate() must honour whatever scoring rule it is given,
 and the default must equal the notebook's dot product exactly. This is the
 contract Module 3 (VAE) plugs into."""
-import numpy as np
 import pytest
 import torch
 

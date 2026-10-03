@@ -55,7 +55,6 @@ def test_rng_state_roundtrip_survives_map_location():
 def test_rng_state_load_accepts_non_cpu_shaped_input():
     """Simulate what map_location=cuda produces: the same states as plain
     tensors that must be coerced without error."""
-    import random as _random
     import torch
     from src.utils import rng_state_dict, rng_state_load
     st = rng_state_dict()

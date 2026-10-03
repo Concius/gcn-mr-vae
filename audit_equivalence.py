@@ -14,7 +14,7 @@ from src.data.dataset import InteractionDataset
 from src.data.synthetic import make_synthetic
 from src.models.lightgcn import LightGCN
 from src.models.losses import BPRTerm, BatchContext, CompositeLoss, L2EgoTerm, ManifoldTerm
-from src.models.mr_layer import build_embedding_laplacian, manifold_loss
+from src.models.mr_layer import build_embedding_laplacian
 from src.metrics.evaluate import dot_product_scorer, evaluate
 from src.metrics.diversity import gini_from_counts
 from src.utils import set_seed
