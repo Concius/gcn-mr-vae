@@ -1,4 +1,4 @@
-# Handoff — state of the project, 4 Oct 2026
+# Handoff — state of the project, 4 Oct 2026 (pair-split results in)
 
 ## Project
 - MSc dissertation **GCN-MR-VAE** (LightGCN + Manifold Regularization + VAE for
@@ -65,24 +65,32 @@
    2.5e-15, verified numerically).
 6. **Determinism:** GPU runs are reproducible to ~1e-6 relative, not bitwise
    (end-of-warm-up ER gap 2–3e-4). Bit-identical holds on CPU only.
+7. **Pair-split of the kernel gradient (Gowalla, 10 seeds, pre-registered; commit
+   a707398).** Routing the kernel gradient only to pairs it merely weakens
+   (`emb_mr_dw_weaken`) reproduces ~86% of `emb_mr_dw`'s ER gain (median share 0.87,
+   range 0.79–0.90); in that arm the MR term never exerts a net-repulsive pair force,
+   so net repulsion is not necessary for most of the effect. Primary weaken − repel
+   +0.415 ER, 10/10, p=0.002. Net-repulsive pairs (`emb_mr_dw_repel`) contribute a
+   smaller real part (+0.12 ER, 10/10) and nothing detectable on np_ref or Recall;
+   interaction −0.035 (10/10 negative, slightly sub-additive). Weakening also raises
+   np_ref (+0.0025, 10/10) at a negligible Recall cost (−0.0002, 9/1). Repelled pairs
+   carry ~34% of the kernel force early, ~17% over the MR phase, for 14–19% of the gain:
+   not disproportionately potent (descriptive). Details in `MIGRATION.md`.
+8. **The logged crossover share undercounts.** Exact rule d2 > 2σ²|z_i||z_j|. Early MR
+   window: 18.2% net-repulsive vs 5.7% logged; late: 1.5% vs 0.00%. At the saved late
+   checkpoints: Gowalla ~1.3%, Yelp ~0.2%, Amazon ~1.0% (similar in `mr_off`).
 
 ### Working hypothesis (Tier 0, exploratory, uncorrected — not a conclusion)
 On all three datasets (10/10 seeds), Emb-MR's changes look like an alignment force
 (alignment better, uniformity worse, rank lower), and the differentiable kernel appears to
 move embeddings back along that trade-off; the effects survive L2 normalisation. The
 dw − emb_mr ER gap forms mostly in epochs 100–450 but keeps growing where no net-repulsive
-pairs remain, so net repulsion is not necessary for the effect. **That last inference is
-suspended (4 Oct):** it used the logged `frac_beyond_crossover`, a unit-sphere rule that
-can only undercount net-repulsive pairs (exact rule: d2 > 2 sigma^2 |z_i||z_j|; on a
-synthetic model 6.5% logged vs 16.6% exact). Re-measure with `analysis/crossover_check.py`;
-the pair-split experiment below tests the attribution directly.
-
-### In progress — pair-split of the kernel gradient (pre-registered 4 Oct, not yet run)
-Arms `emb_mr_dw_weaken` (kernel gradient only on pairs that stay net-attractive) and
-`emb_mr_dw_repel` (only on net-repulsive pairs), Gowalla, 10 seeds. With the existing
-`emb_mr_fresh` and `emb_mr_dw` they form a 2x2 factorial. Primary: weaken − repel on
-er_table. Analysis: `python -m analysis.compare_split runs`. Full pre-registration in
-`MIGRATION.md`. Expected ~13 h of GPU (about the cost of `emb_mr_dw`).
+pairs remain, so net repulsion is not necessary for the effect. **Revised 4 Oct:** that
+inference used the logged share, which undercounts (item 8); "no net-repulsive pairs
+remain" was false (~1.5% remain late). It is superseded by the pair-split (item 7), which
+shows directly that most of the effect needs no net repulsion. The pair-split is
+consistent with "the kernel gradient mostly relaxes MR's pull", but attributes by pair
+class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
 
 ## Literature anchors (found by search this session, except where noted)
 - Böhm, Berens & Kobak, JMLR 2022 — attraction–repulsion spectrum; Laplacian Eigenmaps at
@@ -101,15 +109,16 @@ er_table. Analysis: `python -m analysis.compare_split runs`. Full pre-registrati
   the technique the pair-split uses.
 
 ## Next steps (in order)
-1. **Pair-split kernel gradient** — implemented and verified 4 Oct; run it (see "In
-   progress"), and run `analysis/crossover_check.py` on the existing checkpoints.
-   Optional follow-ups if the result is ambiguous: a dose test via `arm.sigma` (also
-   changes attraction, so not pure); a count-matched random-pair control.
+1. ~~Pair-split kernel gradient~~ — done 4 Oct (Established, item 7). Optional: repeat
+   on Yelp/Amazon (fresh, weaken, repel would be new there).
 2. **Fast Differentiable Sorting** (§4.1.2's named remedy) — differentiable neighbour
    *selection*. A full differentiable k-NN over 70k+ nodes cannot fit in memory; needs a
    candidate-restricted design.
 3. **λ re-sweep under the corrected protocol** — never run. λ=1e-5 was tuned under the old
-   protocol.
+   protocol. Now also the critical control for item 7: if `emb_mr_dw` works mainly by
+   weakening MR's attraction, does it beat simply using a smaller λ? Place `emb_mr_dw`
+   on `emb_mr`'s ER / np_ref / Recall-vs-λ curve: on the curve means "less MR", above
+   it means selective weakening adds something.
 4. **CoOcc-MR (maybe)** — λ=1e-4 (notebook cell 19). np_ref is circular for it (both built
    from R); judge on ER and Recall or pick another external reference.
 5. If MR cannot be fixed: a uniformity term (DirectAU) or stable-rank regularisation (Loveland).
@@ -134,6 +143,9 @@ er_table. Analysis: `python -m analysis.compare_split runs`. Full pre-registrati
 - The alignment/uniformity mechanism as established.
 - The direction of the ER effect as pre-registered (first observed on Gowalla).
 - That no net-repulsive pairs remain late in training: the logged share undercounts.
+- That net-repulsive pairs play no part: repel − fresh is +0.12 ER, 10/10.
+- The pair-split attribution beyond Gowalla, or `emb_mr_dw` as more than "less MR"
+  (untested until the λ re-sweep).
 
 ## `runs/` map
 - `<ds>/mr_off_w100_K3_d256`, `<ds>/emb_mr_w100_lam1e-05_k20_r50_K3_d256` — corrected gate,
@@ -148,8 +160,8 @@ er_table. Analysis: `python -m analysis.compare_split runs`. Full pre-registrati
   replication and decomposition, 3 seeds. (`run_gate_converged.sh` writes to
   `*_converged_w1000` instead, so it cannot collide with these.)
 - `_tier0/` and `tier0.log` — Tier 0 outputs.
-- Planned: `gowalla/emb_mr_dw_{weaken,repel}_w100_lam1e-05_k20_r50_K3_d256` (pair-split,
-  10 seeds); `_crossover_check/` (pre-check output).
+- `gowalla/emb_mr_dw_{weaken,repel}_w100_lam1e-05_k20_r50_K3_d256` — pair-split, 10 seeds;
+  `split.log`. `_crossover_check/checkpoints.csv` and `crossover_check.log` — pre-check.
 
 ## Standing rules
 Verify claims by running them before stating them; one variable per experiment;
