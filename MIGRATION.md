@@ -906,3 +906,89 @@ late 1.5% vs 0.00%, 4.6%. The sphere rule undercounted 3.2x early.
   but this experiment attributes by pair class, not by mechanism).
 - Implication: the open question is whether emb_mr_dw is more than "less MR".
   The lambda re-sweep under the corrected protocol is the control that answers it.
+
+## lambda re-sweep under the corrected protocol (4 Oct 2026) -- pre-registered before running
+
+### Why now, and three purposes
+- **Qualification commitment.** §4.2.3 (Etapas de Execução) states that
+  lambda_manifold "será submetido a análise de sensibilidade durante a fase
+  experimental, com seleção final guiada por Recall@20 sobre uma partição de
+  validação dedicada", and calls 1e-5 a conservative initial value. 1e-5 was
+  chosen under the old protocol; the corrected protocol has never been swept.
+- **Dose-response** of MR on geometry, diversity and accuracy (H2/H3 at other
+  strengths than 1e-5).
+- **Yardstick for the pair-split result.** emb_mr_dw works mainly by weakening
+  MR's attraction; is it more than simply less MR? The emb_mr lambda-curve is
+  also the yardstick any later MR variant (Fast Differentiable Sorting included)
+  must beat.
+
+### Design (`analysis/lambda_sweep.py`)
+Gowalla, seeds 2020-2029, gate configuration (W=100, E=1000, k=20, rebuild 50,
+K=3, d=256, validation selection, budget-matched).
+
+**Stage 1.** emb_mr at lambda in {1e-6, 3e-6, 3e-5, 1e-4} (40 new runs); the
+existing lambda = 1e-5 runs and mr_off (lambda = 0) complete the curve.
+- Selection (the qualification's rule): lambda* = highest mean VALIDATION
+  recall@20 over the 10 seeds, candidates {0} U grid, ties to the smaller
+  lambda; test metrics reported at lambda*. The paired validation test of
+  lambda* against lambda = 0 is printed to show whether the choice is more than
+  a tie-break. Boundary rule: if lambda* = 1e-4, extend with 3e-4 and 1e-3
+  (10 seeds each) before declaring a selection, and re-run the analysis with
+  the extended grid (the dose-response Holm family is then the seven lambdas
+  run). If lambda* is still the top value, no further extension: it is
+  reported as a boundary selection.
+- Dose-response: emb_mr(lambda) - mr_off per seed on er_table, np_ref@20,
+  recall@20, gini@20, tail_catalog_coverage@20; two-sided exact Wilcoxon, Holm
+  across the five lambdas within each metric.
+
+**Stage 2.** lambda' = the lambda at which emb_mr's mean er_table equals
+emb_mr_dw's: first bracketing segment of the curve {0} U grid in increasing
+lambda, linear interpolation in lambda, 2 significant figures; reuse grid runs
+if lambda' equals a grid value; no bracketing segment -> stage 2 not run.
+emb_mr at lambda', 10 seeds.
+- Primary (uncorrected): emb_mr_dw - emb_mr(lambda') on np_ref@20, two-sided.
+- Secondary (Holm across 3): recall@20, gini@20, tail_catalog_coverage@20.
+- Matching check (not a hypothesis): er_table difference.
+- Descriptive: the np_ref-matched lambda by the same rule. If emb_mr_dw were
+  only less MR, the ER- and np_ref-matched lambdas would coincide.
+
+Both directions are open. emb_mr_dw removes a larger fraction of MR's ER
+penalty than of its np_ref penalty, so if both penalties scale with lambda,
+emb_mr_dw could come out *worse* than ER-matched emb_mr on np_ref.
+
+lambda* and lambda' are computed only when every required arm has all 10
+seeds; until then the script prints seed counts only. Every run used must also
+be healthy (finite losses throughout history.json, finite reported metrics):
+a run that diverged late would still report a plausible earlier checkpoint.
+Unhealthy runs are listed and nothing is tested.
+
+### Verification
+- Folder names are built with the trainer's own `_arm_tag` (1e-4 is written
+  `lam0.0001`); all six existing folders reproduce exactly.
+- Hydra parses `arm.lambda_manifold=3e-2` (no decimal point) as a float;
+  checked in the stored config of a real run.
+- **The new runs are comparable with the reused ones.** mr_off and emb_mr trained
+  with this morning's code (the 68-test upload) and with the current code, same
+  data and config: weights bit-identical, results.json identical, history.json
+  identical apart from wall-clock `elapsed_s`. `analysis/config_diff.py`
+  composes the config a command would run and diffs it against a stored run's
+  config; run it against an existing anchor run before launching.
+- 25 tests in `tests/test_lambda_sweep.py` and 2 in `tests/test_config_diff.py`
+  (113 in total): rounding,
+  interpolation including the lambda = 0 segment, first-crossing rule, unsorted
+  input, no match, selection ties, grid reuse; end to end on fabricated results
+  with known answers (completeness gate, reuse, off-grid stage-2 command then
+  test, boundary rule and its second-boundary case, Holm within metric, health
+  gate for stage 1 and stage 2, CSV).
+- Mutation sweep (control not caught): 21/21 caught (13 rules, 6 health gate,
+  2 boundary).
+- Replica with the real trainer (synthetic data): both stages, the printed
+  stage-2 command, the matching check near zero, the curve CSV.
+
+### Commands
+Stage 1 (~26 h; seed first so an interruption leaves complete curves):
+
+    python -m src.train -m dataset=gowalla seed=2020,2021,2022,2023,2024,2025,2026,2027,2028,2029 arm=emb_mr arm.lambda_manifold=1e-6,3e-6,3e-5,1e-4
+
+Then `python -m analysis.lambda_sweep --out runs/_lambda_sweep`. It prints
+lambda*, lambda' and the exact stage-2 command (~7 h).

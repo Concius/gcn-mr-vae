@@ -1,4 +1,4 @@
-# Handoff — state of the project, 4 Oct 2026 (pair-split results in)
+# Handoff — state of the project, 4 Oct 2026 (pair-split results in; λ re-sweep pre-registered)
 
 ## Project
 - MSc dissertation **GCN-MR-VAE** (LightGCN + Manifold Regularization + VAE for
@@ -29,12 +29,15 @@
 ## Repository
 - One `Trainer` for every arm; composable loss; Hydra configs; arms `baseline`, `mr_off`,
   `emb_mr`, `coocc_mr`, `emb_mr_fresh`, `emb_mr_dw`, `emb_mr_dw_weaken`, `emb_mr_dw_repel`.
-- 86 tests; `audit_equivalence.py` 24/24 against the notebook (CPU, exact). Mutation
+- 113 tests; `audit_equivalence.py` 24/24 against the notebook (CPU, exact). Mutation
   sweeps (harness validated with controls): 42/42 guarantees on 3 Oct, plus 15/15 for the
-  pair-split code on 4 Oct; the GPU RNG coercion is untestable on CPU (a no-op there).
+  pair-split code and 21/21 for the λ-sweep analysis on 4 Oct; the GPU RNG coercion is
+  untestable on CPU (a no-op there).
 - Analysis: `analysis/summarize.py` (groups by run directory, `--dataset`, refuses
   ambiguous arm names), `analysis/compare_kernel.py` and `analysis/compare_split.py`
-  (pre-registered), `analysis/tier0.py`, `analysis/crossover_check.py` (CPU).
+  and `analysis/lambda_sweep.py` (pre-registered), `analysis/tier0.py`,
+  `analysis/crossover_check.py` (CPU), `analysis/config_diff.py` (does a new command
+  reproduce an existing run's config? run before reusing old runs).
 - On Gowalla the bare name `emb_mr` matches several configurations: use exact tags.
 
 ## Results
@@ -111,14 +114,16 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
 ## Next steps (in order)
 1. ~~Pair-split kernel gradient~~ — done 4 Oct (Established, item 7). Optional: repeat
    on Yelp/Amazon (fresh, weaken, repel would be new there).
-2. **Fast Differentiable Sorting** (§4.1.2's named remedy) — differentiable neighbour
+2. **Fast Differentiable Sorting** (§4.1.2's named remedy; after the λ re-sweep, whose
+   curve is the yardstick it must beat) — differentiable neighbour
    *selection*. A full differentiable k-NN over 70k+ nodes cannot fit in memory; needs a
    candidate-restricted design.
-3. **λ re-sweep under the corrected protocol** — never run. λ=1e-5 was tuned under the old
-   protocol. Now also the critical control for item 7: if `emb_mr_dw` works mainly by
-   weakening MR's attraction, does it beat simply using a smaller λ? Place `emb_mr_dw`
-   on `emb_mr`'s ER / np_ref / Recall-vs-λ curve: on the curve means "less MR", above
-   it means selective weakening adds something.
+3. **λ re-sweep under the corrected protocol** — pre-registered 4 Oct, NEXT TO RUN
+   (`MIGRATION.md`, `analysis/lambda_sweep.py`). Fulfils the qualification's §4.2.3
+   commitment (λ selected by validation Recall@20), gives the dose-response, and is the
+   control for item 7: stage 2 runs `emb_mr` at the λ′ that matches `emb_mr_dw` on ER and
+   tests np_ref. Gowalla first (~26 h + ~7 h); Yelp (~47 h + ~12 h) and Amazon (~180 h)
+   are a later decision.
 4. **CoOcc-MR (maybe)** — λ=1e-4 (notebook cell 19). np_ref is circular for it (both built
    from R); judge on ER and Recall or pick another external reference.
 5. If MR cannot be fixed: a uniformity term (DirectAU) or stable-rank regularisation (Loveland).

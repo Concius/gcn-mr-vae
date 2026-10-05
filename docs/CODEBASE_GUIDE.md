@@ -145,9 +145,11 @@ gcn-mr-vae/
 │   ├── compare_kernel.py the pre-registered differentiable-kernel analysis
 │   ├── compare_split.py  the pre-registered pair-split analysis (2×2 factorial)
 │   ├── crossover_check.py net-repulsive share at saved checkpoints, exact vs sphere rule
+│   ├── lambda_sweep.py   the pre-registered λ re-sweep (selection, dose-response, yardstick)
+│   ├── config_diff.py    would a command reproduce an existing run's config?
 │   └── tier0.py          interpretation: trajectory, norms/angles, alignment/uniformity, spectrum
 ├── scripts/            run_gate.sh, run_sweep.sh, run_tests.sh
-├── tests/              86 automated tests (see Part 7 and MIGRATION.md)
+├── tests/              113 automated tests (see Part 7 and MIGRATION.md)
 ├── audit_equivalence.py    proves the port matches the notebook numerically
 ├── docs/               this guide
 ├── MIGRATION.md        cell-by-cell map from the notebook, fix log, audit log
@@ -335,11 +337,19 @@ The pre-registered analysis for the pair-split of the kernel gradient. `emb_mr_f
 
 Re-measures, from the saved validation-selected checkpoints, how many neighbour pairs are net-repulsive under the exact rule versus the unit-sphere rule that runs before 4 Oct 2026 logged as `frac_beyond_crossover`. The k-NN graph is rebuilt from each checkpoint, so it approximates the graph in use at that epoch. CPU, nothing retrained. `python -m analysis.crossover_check`; outputs to `runs/_crossover_check/`.
 
-## 3.15 `scripts/`
+## 3.15 `analysis/lambda_sweep.py`
+
+The pre-registered λ re-sweep. Stage 1 reads `emb_mr` at every grid λ plus `mr_off` (λ = 0): it selects λ\* by mean validation Recall@20 (the qualification's §4.2.3 rule, with a boundary-extension rule), tests each λ against `mr_off` (Holm within metric), and computes λ′, the λ at which `emb_mr` matches `emb_mr_dw` on ER. Stage 2 compares `emb_mr_dw` with `emb_mr(λ′)`, primary on np_ref@20. Nothing is computed until every arm has every seed. Folder names come from the trainer's own `_arm_tag`. `python -m analysis.lambda_sweep --out runs/_lambda_sweep`.
+
+## 3.16 `analysis/config_diff.py`
+
+Composes the configuration a `src.train` command would run (nothing is trained) and compares it key by key with the configuration stored in an existing run's `results.json`, ignoring `paths.*`. Run it before reusing old runs as arms or controls of a new experiment: any difference beyond the intended ones means the runs are not comparable. `python -m analysis.config_diff <run_dir> <overrides...>`.
+
+## 3.17 `scripts/`
 
 `run_gate.sh` launches the September gate (two arms × five seeds on Gowalla) and summarises. `run_sweep.sh` does all three datasets. `run_tests.sh` is `pytest tests -q`. All accept extra Hydra overrides as arguments.
 
-## 3.16 `tests/` and `audit_equivalence.py`
+## 3.18 `tests/` and `audit_equivalence.py`
 
 Described in Part 7.
 
