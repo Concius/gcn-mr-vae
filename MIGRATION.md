@@ -992,3 +992,59 @@ Stage 1 (~26 h; seed first so an interruption leaves complete curves):
 
 Then `python -m analysis.lambda_sweep --out runs/_lambda_sweep`. It prints
 lambda*, lambda' and the exact stage-2 command (~7 h).
+
+### Results (Gowalla, 10 seeds) -- `analysis/lambda_sweep.py`, commit 75c0a5e
+
+All 70 stage-1 runs and 10 stage-2 runs complete and healthy. The lambda = 1e-5
+row reproduces the established gate result (same runs).
+
+**Stage 1, means over seeds.**
+
+| lambda | val R@20 | ER_tab | np_ref@20 | recall@20 | gini@20 | tail_cov@20 |
+|---|---|---|---|---|---|---|
+| 0 (mr_off) | 0.20994 | 233.628 | 0.41880 | 0.18233 | 0.89994 | 0.42058 |
+| 1e-6 | 0.20993 | 233.480 | 0.41781 | 0.18231 | 0.90019 | 0.41944 |
+| 3e-6 | 0.20977 | 233.321 | 0.41670 | 0.18246 | 0.90065 | 0.41716 |
+| 1e-5 | 0.20942 | 232.665 | 0.41231 | 0.18247 | 0.90156 | 0.41126 |
+| 3e-5 | 0.20823 | 230.968 | 0.40132 | 0.18251 | 0.90400 | 0.39695 |
+| 1e-4 | 0.20311 | 225.669 | 0.37322 | 0.18110 | 0.90924 | 0.36397 |
+| emb_mr_dw (1e-5) | 0.20952 | 233.309 | 0.41493 | 0.18236 | 0.90149 | 0.41255 |
+
+- **Selection (qualification §4.2.3 rule): lambda* = 0.** Validation recall@20
+  falls monotonically with lambda; the committed procedure selects no MR.
+- **Dose-response:** ER and np_ref lower at every lambda (10/10 from 3e-6, 9/1
+  at 1e-6); Gini higher (worse) and tail coverage lower (worse) 10/10 at every
+  lambda including 1e-6. Penalties roughly proportional to lambda, mildly
+  sublinear (ER penalty per unit lambda ~1.0e5 at 3e-6, 0.8e5 at 1e-4).
+- **Recall:** +0.00014 to +0.00018 at 3e-6..3e-5 (<0.1% relative), significant
+  only at 3e-6 (9/1) and not reproduced on validation; -0.00123 (-0.7%) at 1e-4,
+  10/10.
+- **Grouping robustness (exact p):** every unanimous result survives Holm across
+  all 25 dose-response tests (0.049). Grouping-dependent: ER and np_ref at 1e-6,
+  and the recall gain at 3e-6.
+
+**Yardstick.** lambda' (ER-matched) = 3.1e-6 (3.121e-6 recomputed). Descriptive
+equivalent lambda of emb_mr_dw per metric: ER 3.1e-6, np_ref 5.8e-6, tail 8.5e-6,
+Gini 9.5e-6 -- not one lambda, so emb_mr_dw is off the curve.
+
+**Stage 2: emb_mr_dw - emb_mr(3.1e-6).**
+- Matching check: ER -0.037, 3/7, p = 0.15 (matched).
+- **Primary np_ref@20: -0.00184, dw lower in 10/10, p = 0.0020.**
+- Secondary (Holm across 3): Gini +0.00085 (worse) 10/10, Holm 0.0059; tail
+  coverage -0.00465 (worse) 10/10, Holm 0.0059; recall -0.00007, 6/4, n.s.
+- The interpolation from stage 1 predicted -0.0017, +0.0008 and -0.0045.
+
+**Reading.**
+- Established (Gowalla): emb_mr_dw is not "less MR"; it lies off the emb_mr
+  curve on the dominated side. At equal ER, plain emb_mr at lambda = 3.1e-6 has
+  better np_ref, Gini and tail coverage in 10/10 seeds and the same recall.
+  Lowering lambda recovers ER more cheaply than the differentiable kernel.
+- Established (Gowalla): under the corrected protocol, Laplacian MR lowers ER,
+  np_ref and diversity at every strength from 1e-6 to 1e-4, roughly in
+  proportion to lambda, with no accuracy benefit on validation; the
+  qualification's selection rule picks lambda = 0.
+- Unchanged: the pair-split attribution describes how emb_mr_dw behaves; it does
+  not make emb_mr_dw a better MR.
+- Not established: other datasets (Yelp at 1e-5 showed a slight recall gain,
+  Amazon better tail coverage); why selective weakening recovers ER but not
+  np_ref or diversity.
