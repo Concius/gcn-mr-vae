@@ -1048,3 +1048,15 @@ Gini 9.5e-6 -- not one lambda, so emb_mr_dw is off the curve.
 - Not established: other datasets (Yelp at 1e-5 showed a slight recall gain,
   Amazon better tail coverage); why selective weakening recovers ER but not
   np_ref or diversity.
+
+### Yelp replication (6 Oct 2026) -- declared before running
+
+The same pre-registered analysis, unchanged, on yelp2018: grid {1e-6, 3e-6,
+3e-5, 1e-4} plus the existing lambda = 1e-5, mr_off and emb_mr_dw runs (10 seeds
+each, corrected gate), seeds 2020-2029, same selection rule (validation
+recall@20, ties to the smaller lambda, boundary extension to 3e-4 and 1e-3),
+same dose-response tests, same lambda' rule and stage-2 tests
+(`python -m analysis.lambda_sweep --dataset yelp2018`). Nothing about the rules
+is changed in the light of the Gowalla result. Why Yelp: it is the dataset where
+emb_mr at 1e-5 showed a slight recall gain (8/2), so it is where the selection
+rule could pick lambda > 0. Cost ~47 h (stage 1) + ~12 h (stage 2).

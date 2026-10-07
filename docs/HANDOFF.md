@@ -1,4 +1,4 @@
-# Handoff — state of the project, 6 Oct 2026 (pair-split and Gowalla λ re-sweep results in)
+# Handoff — state of the project, 6 Oct 2026 (Gowalla λ re-sweep in; Yelp replication running)
 
 ## Project
 - MSc dissertation **GCN-MR-VAE** (LightGCN + Manifold Regularization + VAE for
@@ -129,9 +129,10 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
    on Gowalla no MR variant clears either — differentiable neighbour
    *selection*. A full differentiable k-NN over 70k+ nodes cannot fit in memory; needs a
    candidate-restricted design.
-3. ~~λ re-sweep, Gowalla~~ — done 6 Oct (Established, item 9). Yelp (~47 h + ~12 h) is
-   the informative extension (MR's only recall gain was there); the identical analysis
-   applies with `--dataset yelp2018`. Amazon (~180 h) only if needed.
+3. ~~λ re-sweep, Gowalla~~ — done 6 Oct (Established, item 9). **Yelp replication
+   running from 6 Oct** (declared in `MIGRATION.md` before launch; ~47 h + ~12 h; analysis
+   `python -m analysis.lambda_sweep --dataset yelp2018 --out runs/_lambda_sweep`).
+   Amazon (~180 h) only if needed.
 4. **CoOcc-MR (maybe)** — λ=1e-4 (notebook cell 19). np_ref is circular for it (both built
    from R); judge on ER and Recall or pick another external reference.
 5. If MR cannot be fixed: a uniformity term (DirectAU) or stable-rank regularisation (Loveland).
