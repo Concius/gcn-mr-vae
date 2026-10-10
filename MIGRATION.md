@@ -1060,3 +1060,84 @@ same dose-response tests, same lambda' rule and stage-2 tests
 is changed in the light of the Gowalla result. Why Yelp: it is the dataset where
 emb_mr at 1e-5 showed a slight recall gain (8/2), so it is where the selection
 rule could pick lambda > 0. Cost ~47 h (stage 1) + ~12 h (stage 2).
+
+### Results (Yelp, 10 seeds) -- `analysis/lambda_sweep.py`, run 6-10 Oct 2026
+
+All 90 stage-1 runs (including the boundary extension) and 10 stage-2 runs complete
+and healthy. The extension and stage 2 ran at commit 6f73bfc, whose `src/`,
+`analysis/` and `configs/` are identical to 75c0a5e (`git diff --stat` empty).
+The lambda = 1e-5 row reproduces the established gate result (same runs; recall
+8/2, p = 0.0195), and emb_mr_dw - emb_mr(1e-5) on ER is +0.409, as established.
+
+**Stage 1, means over seeds.**
+
+| lambda | val R@20 | ER_tab | np_ref@20 | recall@20 | gini@20 | tail_cov@20 |
+|---|---|---|---|---|---|---|
+| 0 (mr_off) | 0.11366 | 242.623 | 0.38085 | 0.06583 | 0.91795 | 0.28732 |
+| 1e-6 | 0.11372 | 242.570 | 0.38022 | 0.06582 | 0.91800 | 0.28717 |
+| 3e-6 | 0.11383 | 242.449 | 0.37895 | 0.06585 | 0.91815 | 0.28676 |
+| 1e-5 | 0.11417 | 241.925 | 0.37358 | 0.06597 | 0.91872 | 0.28452 |
+| 3e-5 | 0.11493 | 240.785 | 0.36161 | 0.06641 | 0.91945 | 0.28227 |
+| 1e-4 | 0.11499 | 236.577 | 0.32685 | 0.06626 | 0.92144 | 0.27297 |
+| 3e-4 | 0.11030 | 226.150 | 0.27710 | 0.06416 | 0.92515 | 0.24856 |
+| 1e-3 | 0.09969 | 202.344 | 0.22888 | 0.05914 | 0.92868 | 0.22902 |
+| emb_mr_dw (1e-5) | 0.11396 | 242.334 | 0.37618 | 0.06587 | 0.91866 | 0.28395 |
+
+- **Boundary rule fired as declared.** On the first grid lambda* was 1e-4, the top
+  value; the pre-registered extension (3e-4, 1e-3) was run before any selection.
+- **Selection (qualification §4.2.3 rule): lambda* = 1e-4**, now an interior
+  maximum. Validation recall@20 +0.00134 over lambda = 0 (+1.2%), 10/10, p = 0.002
+  (uncorrected). The validation curve is nearly flat between 3e-5 and 1e-4 (means
+  differ by 0.00006, ~5% of the gain) and falls steeply above (-3.0% at 3e-4,
+  -12.3% at 1e-3).
+- **Test at lambda* vs lambda = 0:** recall@20 +0.00044 (+0.65%, 10/10); ER -2.5%,
+  np_ref -14.2%, Gini +0.38% (worse), tail coverage -5.0% (all 10/10). Test recall
+  peaks at 3e-5 (+0.88%), not at lambda*; the validation gain overstates the test gain.
+- **Dose-response (Holm across the seven lambdas within metric, as declared):**
+  ER and np_ref lower at every lambda (10/10 except ER 9/1 at 1e-6), Holm 0.0137.
+  Gini higher and tail coverage lower from 3e-6 (n.s. at 1e-6). Recall: n.s. at
+  1e-6..1e-5 (1e-5: 8/2, Holm 0.059); better 10/10 at 3e-5 and 1e-4; worse 10/10
+  at 3e-4 (-2.5%) and 1e-3 (-10.2%).
+- **Grouping robustness (exact p).** Per metric, per hypothesis (recall alone or
+  inside H2) the same 30/35 tests are significant (largest adjusted p 0.041, the
+  recall gains with recall inside H2). A single family of all 35 tests rejects
+  nothing: at n = 10 the smallest exact two-sided p is 2/1024, so Holm cannot
+  reject in any family larger than 25 tests (35 x 2/1024 = 0.068). The all-tests
+  grouping is therefore not usable for a sweep this size; report per hypothesis.
+
+**Yardstick.** lambda' (ER-matched) = 4.5e-6 (4.53e-6 recomputed); unchanged by
+the extension (first bracketing segment 3e-6..1e-5). Descriptive equivalent
+lambda of emb_mr_dw per metric: ER 4.5e-6, np_ref 6.6e-6, Gini 9.3e-6, tail 1.5e-5.
+
+**Stage 2: emb_mr_dw - emb_mr(4.5e-6).**
+- **Matching check failed:** ER +0.094, dw higher in 9/10, p = 0.0039. emb_mr at
+  4.5e-6 has ER 242.240, not the 242.336 that linear interpolation in lambda
+  predicted: the ER curve is not linear between 3e-6 and 1e-5. The mismatch is 23%
+  of dw's ER gain over emb_mr(1e-5), and it puts the comparison arm further along
+  the lambda-curve than dw, which favours dw on np_ref, Gini and tail coverage.
+- **Primary np_ref@20: -0.00079, dw lower in 9/10, p = 0.0645 -- not significant.**
+  The one seed where dw is higher has the second-largest absolute difference
+  (rank 9 of 10), which is why 9/1 does not reach 0.05.
+- Secondary (Holm across 3): Gini +0.00026 (worse), 9/1, Holm 0.0117; tail coverage
+  -0.00172 (worse), 9/1, Holm 0.0117; recall +0.00004, 5/5, n.s.
+- Before stage 2, linear interpolation from stage 1 suggested np_ref -0.0016,
+  Gini +0.0004, tail -0.0023; the realised primary was half that.
+- Descriptive only (post hoc, not a test): re-interpolating with the 4.5e-6 point,
+  ER is matched near 3.8e-6, where the interpolated gaps are np_ref -0.0017,
+  Gini +0.0004, tail -0.0022, recall +0.00003.
+
+**Reading.**
+- Established (Yelp): the qualification's selection rule picks MR, lambda* = 1e-4,
+  for a small accuracy gain (+0.65% test recall, 10/10) bought with lower ER and
+  np_ref and worse diversity, all 10/10. This is the opposite of H2 (geometry up at
+  no recall cost) and contradicts H3. Above 1e-4 everything, recall included, worsens.
+- Established on both datasets: Laplacian MR lowers ER and np_ref and worsens Gini
+  and tail coverage at every strength tested, monotonically in lambda.
+- Yelp stage 2: the pre-registered primary does not replicate (n.s.); the
+  diversity secondaries do (dw worse at the matched lambda, despite a mismatch that
+  favours dw). Across both datasets emb_mr_dw is not significantly better than
+  ER-matched emb_mr on any metric. Supported: "emb_mr_dw is no better than less MR". Gowalla only:
+  "dominated on np_ref".
+- Not established: Amazon (at 1e-5 it showed better tail coverage and worse
+  recall, a different pattern); why Yelp's accuracy responds to MR and Gowalla's
+  does not.

@@ -1,4 +1,4 @@
-# Handoff — state of the project, 6 Oct 2026 (Gowalla λ re-sweep in; Yelp replication running)
+# Handoff — state of the project, 10 Oct 2026 (λ re-sweep done on Gowalla and Yelp)
 
 ## Project
 - MSc dissertation **GCN-MR-VAE** (LightGCN + Manifold Regularization + VAE for
@@ -62,8 +62,9 @@
    +0.620 ER, 10/10 (pre-registered primary, p=0.002); fresh − emb_mr only +0.024.
    Yelp and Amazon, dw-only design: dw − emb_mr +0.409 and +0.631 ER, 10/10 (primaries).
    Removes 59–77% of MR's ER penalty and ~40% of its np_ref penalty, but MR stays below the
-   control on both. **Not an improvement over weaker MR (item 9):** at equal ER, plain
-   `emb_mr` at λ = 3.1e-6 beats it on np_ref, Gini and tail coverage (Gowalla, 10/10). Diversity worse than the control everywhere (on Amazon dw loses
+   control on both. **Not an improvement over weaker MR (items 9–10):** at equal ER, plain
+   `emb_mr` at λ = 3.1e-6 beats it on np_ref, Gini and tail coverage (Gowalla, 10/10);
+   on Yelp it is worse on Gini and tail coverage, np_ref n.s. (item 10). Diversity worse than the control everywhere (on Amazon dw loses
    emb_mr's diversity gains). Recall level with the control except Amazon (slightly worse, 9/10).
 5. **The kernel-gradient term is purely rotational** at the propagated level (radial share
    2.5e-15, verified numerically).
@@ -92,6 +93,17 @@
    `emb_mr` is np_ref −0.0018 (10/10, p=0.002), Gini +0.0009 and tail −0.0047 (both
    worse, 10/10), Recall n.s.: `emb_mr_dw` is off the λ-curve on the dominated side.
    Curves in `runs/_lambda_sweep/gowalla_curve.csv`; details in `MIGRATION.md`.
+10. **λ re-sweep, Yelp (10 seeds; same pre-registered analysis, declared before running).**
+   λ ∈ {0, 1e-6, 3e-6, 1e-5, 3e-5, 1e-4} plus the pre-registered boundary extension
+   {3e-4, 1e-3} (λ\* first landed on 1e-4, the top value). **λ\* = 1e-4**, an interior
+   maximum: validation recall +1.2% over λ = 0 (10/10). At λ\*, test recall +0.65% (10/10),
+   ER −2.5%, np_ref −14.2%, Gini worse, tail coverage −5.0% (all 10/10). Test recall peaks
+   at 3e-5 (+0.88%); validation nearly flat 3e-5–1e-4; everything, recall included, worse
+   at 3e-4 and 1e-3 (recall −2.5%, −10.2%). ER and np_ref lower at every λ; Gini and tail
+   worse from 3e-6. Stage 2 (λ′ = 4.5e-6): **matching check failed** (dw ER +0.094, 9/10;
+   ER is not linear in λ there, and the mismatch favours dw); primary np_ref −0.0008, 9/1,
+   **p = 0.065, n.s.**; Gini and tail worse (9/1, Holm 0.012); recall n.s.
+   Curves in `runs/_lambda_sweep/yelp2018_curve.csv`; details in `MIGRATION.md`.
 
 ### Working hypothesis (Tier 0, exploratory, uncorrected — not a conclusion)
 On all three datasets (10/10 seeds), Emb-MR's changes look like an alignment force
@@ -126,13 +138,15 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
    on Yelp/Amazon (fresh, weaken, repel would be new there).
 2. **Fast Differentiable Sorting** (§4.1.2's named remedy) — ON HOLD pending a decision
    with Pedronette: after item 9 its bar is "beat no MR" (or at least the λ-curve), and
-   on Gowalla no MR variant clears either — differentiable neighbour
+   on Gowalla no MR variant clears either, and on Yelp λ\* = 1e-4 beats no MR on
+   recall only, at a geometry and diversity cost — differentiable neighbour
    *selection*. A full differentiable k-NN over 70k+ nodes cannot fit in memory; needs a
    candidate-restricted design.
-3. ~~λ re-sweep, Gowalla~~ — done 6 Oct (Established, item 9). **Yelp replication
-   running from 6 Oct** (declared in `MIGRATION.md` before launch; ~47 h + ~12 h; analysis
-   `python -m analysis.lambda_sweep --dataset yelp2018 --out runs/_lambda_sweep`).
-   Amazon (~180 h) only if needed.
+3. ~~λ re-sweep, Gowalla and Yelp~~ — done 6 and 10 Oct (Established, items 9–10).
+   Amazon (~180 h + ~45 h extension if the boundary fires) only if needed; it is the
+   dataset whose 1e-5 pattern differed (tail better, recall worse). Optional, post hoc
+   and exploratory if run: Yelp `emb_mr` at λ ≈ 3.8e-6 (the ER match re-interpolated
+   with the 4.5e-6 point; ~12 h) to see whether the failed match explains the n.s. primary.
 4. **CoOcc-MR (maybe)** — λ=1e-4 (notebook cell 19). np_ref is circular for it (both built
    from R); judge on ER and Recall or pick another external reference.
 5. If MR cannot be fixed: a uniformity term (DirectAU) or stable-rank regularisation (Loveland).
@@ -145,15 +159,19 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
 8. **Publication:** the confound finding suits a reproducibility track (check RecSys CFP); iSys.
 
 ## Decisions pending
-- Holm family for reporting (per hypothesis is the most defensible; at 10 seeds unanimous
-  results survive every grouping) — state the choice.
+- Holm family for reporting: per hypothesis (the most defensible). Note: at n = 10 the
+  smallest exact p is 2/1024, so Holm can reject nothing in a family of more than 25
+  tests; an "all tests" family is unusable for the 35-test Yelp sweep.
 - GCN-MR-VAE encoder input: raw interaction vector or LightGCN/MR user embedding.
 - Whether to run `emb_mr_fresh` on Yelp/Amazon (currently assumed freshness ~4% transfers).
-- Module-2 framing, to discuss with Pedronette — now concrete: on Gowalla MR is dominated
-  by no MR at every λ and the qualification's own rule selects λ = 0. Options: report the
-  corrected-protocol negative result (reproducibility track); test H4 (MR inputs for the
-  VAE), which does not depend on H2/H3; try a uniformity / stable-rank regulariser
-  (step 5); FDS. Run the Yelp sweep first?
+- Module-2 framing, to discuss with Pedronette — now concrete: H2 and H3 are contradicted
+  on Gowalla and Yelp at every λ (geometry and diversity worse, monotone in λ). The
+  qualification's rule selects λ = 0 on Gowalla and λ = 1e-4 on Yelp, where MR buys
+  +0.65% recall with large geometry/diversity costs: MR acts, at best, as a small
+  accuracy regulariser on one dataset, not as a geometry regulariser. Options: report
+  the corrected-protocol result (reproducibility track); test H4 (MR inputs for the
+  VAE), which does not depend on H2/H3; a uniformity / stable-rank regulariser
+  (step 5); FDS. The λ for H4 is now a choice to make: λ\* per dataset, or a fixed λ.
 
 ## Do not claim
 - "Bit-identical" for GPU runs.
@@ -163,9 +181,12 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
 - That no net-repulsive pairs remain late in training: the logged share undercounts.
 - That net-repulsive pairs play no part: repel − fresh is +0.12 ER, 10/10.
 - `emb_mr_dw` as an improvement over MR: at equal ER it is worse than weaker `emb_mr`.
-- Any λ > 0 as selected on Gowalla, or the λ-sweep results beyond Gowalla.
-- The pair-split attribution beyond Gowalla, or `emb_mr_dw` as more than "less MR"
-  (untested until the λ re-sweep).
+- Any λ > 0 as selected on Gowalla; the λ-sweep results on Amazon.
+- That MR's Yelp recall gain comes with better geometry: at λ\* ER, np_ref and diversity
+  are all worse (10/10).
+- `emb_mr_dw` as dominated on np_ref beyond Gowalla: the Yelp primary is n.s.
+  (p = 0.065) with a failed ER match; Yelp supports only "worse on diversity".
+- The pair-split attribution beyond Gowalla.
 
 ## `runs/` map
 - `<ds>/mr_off_w100_K3_d256`, `<ds>/emb_mr_w100_lam1e-05_k20_r50_K3_d256` — corrected gate,
@@ -182,6 +203,9 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
 - `_tier0/` and `tier0.log` — Tier 0 outputs.
 - `gowalla/emb_mr_w100_lam{1e-06,3e-06,3e-05,0.0001,3.1e-06}_k20_r50_K3_d256` — λ sweep
   (10 seeds each); `lambda_sweep.log`, `lambda_stage2.log`, `_lambda_sweep/gowalla_curve.csv`.
+- `yelp2018/emb_mr_w100_lam{1e-06,3e-06,3e-05,0.0001,0.0003,0.001,4.5e-06}_k20_r50_K3_d256`
+  — λ sweep (10 seeds each); `lambda_sweep_yelp.log`, `lambda_ext_yelp.log`,
+  `lambda_stage2_yelp.log`, `_lambda_sweep/yelp2018_curve.csv`.
 - `gowalla/emb_mr_dw_{weaken,repel}_w100_lam1e-05_k20_r50_K3_d256` — pair-split, 10 seeds;
   `split.log`. `_crossover_check/checkpoints.csv` and `crossover_check.log` — pre-check.
 
