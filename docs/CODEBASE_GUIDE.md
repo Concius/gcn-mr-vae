@@ -39,7 +39,7 @@ The dissertation proposes a pipeline of three modules, each addressing a specifi
 
 **Module 2 — the Manifold Regularisation (MR) layer.** The dissertation's diagnosis (Hypothesis H1) is that graph convolution over-compresses the embedding space: after training, the 256 dimensions are used unevenly, and the local neighbourhood structure the model started with is almost entirely discarded. The MR layer adds a penalty during training that says: *if two embeddings are close now, keep them close*. It does this by building a graph of each embedding's 20 nearest neighbours and penalising abrupt changes across that graph. The penalty is small, and the neighbour graph is rebuilt every 50 epochs so it tracks the embeddings as they learn.
 
-**Module 3 — the VAE (not yet implemented).** A Variational Autoencoder turns each user's embedding into a *distribution* rather than a single point, capturing uncertainty about their preferences. It is scheduled for the November 2026 – January 2027 window. The code has a fixed attachment point for it (see `src/models/vae.py` and `VAE_ROADMAP.md`), but nothing in this repository trains a VAE yet.
+**Module 3 — the VAE (in progress).** A Variational Autoencoder turns each user's embedding into a *distribution* rather than a single point, capturing uncertainty about their preferences. Built so far (11 Oct 2026): the VAE-CF baseline (Mult-VAE^PR, `arm=vae_cf`, `src/vae_cf.py`) and the collapse diagnostics H4 is defined by (KL, per-dimension KL, active units). Not built yet: the GCN-VAE / GCN-MR-VAE term (Phase 3), which waits on the encoder-input decision. See `VAE_ROADMAP.md`.
 
 ## 1.3 The four hypotheses the code is built to test
 
@@ -56,7 +56,7 @@ Every metric the code computes maps onto one of these. When you see `er_table` o
 
 **Does:** loads the three benchmark datasets; carves a validation set; trains LightGCN with or without the MR term under a strictly controlled protocol; evaluates all recommendation, diversity and geometric metrics; writes every result to disk; aggregates runs and performs the paired statistical test.
 
-**Does not (yet):** train a VAE; run the VAE-CF baseline; run the sparse-user experiment. These are Phase B and C of `VAE_ROADMAP.md`.
+**Does not (yet):** train GCN-VAE or GCN-MR-VAE (the VAE-CF baseline does run); run the sparse-user experiment. These are Phase B and C of `VAE_ROADMAP.md`.
 
 ---
 
@@ -134,7 +134,7 @@ gcn-mr-vae/
 │   └── arm/              baseline.yaml, mr_off.yaml, emb_mr.yaml, coocc_mr.yaml
 ├── src/                the software
 │   ├── data/             loading, splitting, downloading, synthetic data
-│   ├── models/           LightGCN, the MR layer, the composable loss, the VAE stub
+│   ├── models/           LightGCN, the MR layer, the composable loss, Mult-VAE^PR and its diagnostics
 │   ├── metrics/          ranking, diversity, geometry, and the evaluator
 │   ├── sampling.py       BPR negative sampling
 │   ├── trainer.py        the training loop — one class for every arm
@@ -149,7 +149,7 @@ gcn-mr-vae/
 │   ├── config_diff.py    would a command reproduce an existing run's config?
 │   └── tier0.py          interpretation: trajectory, norms/angles, alignment/uniformity, spectrum
 ├── scripts/            run_gate.sh, run_sweep.sh, run_tests.sh
-├── tests/              113 automated tests (see Part 7 and MIGRATION.md)
+├── tests/              135 automated tests (see Part 7 and MIGRATION.md)
 ├── audit_equivalence.py    proves the port matches the notebook numerically
 ├── docs/               this guide
 ├── MIGRATION.md        cell-by-cell map from the notebook, fix log, audit log
@@ -257,11 +257,15 @@ For the differentiable-kernel arms, `build_embedding_knn` returns the same neigh
 
 **Why.** The notebook had `BPRLoss`, `BPRLoss_MR` and `BPRLoss_MR_CoOccurrence`, three classes whose `stageOne` methods differed only in whether a manifold term was added, each with its own Adam optimiser, each driven by its own copy of the training loop. Three copies of the same logic is three places for a fix to be forgotten. The audit harness (Part 7) reimplements the notebook's `stageOne` verbatim and confirms the composed loss and its **gradient** match to `0.00e+00`.
 
-### `vae.py` — interface only
+### `vae.py` — Mult-VAE^PR and the collapse diagnostics
 
-Raises `NotImplementedError` on construction. The docstring records the intended shape (a `VAETerm` reading `ctx.all_emb`, returning `recon + β·KL` and logging per-dimension KL and active units) and the collapse defences to wire in from day one. It exists so the attachment point is fixed now and nobody writes a fourth training loop later.
+`MultVAE` reimplements Mult-VAE^PR (Liang et al., WWW 2018; not part of PyTorch) as in the reference code: L2-normalised input, inverted input dropout 0.5, [I → 600 → 200 → 600 → I] with tanh, multinomial likelihood, β annealed linearly per update to a cap of 0.2, Xavier weights and tiny biases, scoring with the posterior mean. `gaussian_kl`, `kl_with_free_bits`, `BetaSchedule` (linear / constant / cyclical) and `latent_diagnostics` (total KL, per-dimension KL, active units — Var over users of the posterior mean > 0.01, Burda et al. 2016) are shared with the GCN-VAE term to come. `VAETerm` still raises: it depends on the encoder input, which is open.
 
-## 3.7 `src/metrics/`
+**Why ER is not used as a collapse metric.** On the synthetic check (40 epochs), a deliberately collapsed VAE (β = 5: KL 0.014, 0 of 16 active units) had the *highest* ER of its posterior means of the four settings tried (15.2 of 16); in a 100-epoch run it was mid-range (9.0). ER is scale-invariant: it describes the shape of whatever residual variation is left, however tiny, so it does not separate collapsed from healthy runs. Collapse is read off KL and active units.
+
+### `vae_cf.py` — the VAE-CF baseline's loop
+
+A short loop for a model that is not LightGCN (it consumes the raw training row r_u), on the same protocol as every other arm: same split, same `evaluate()`, encoder fed only the reduced training row (no validation items, for val or test scoring), selection on validation Recall@20, budget `epochs`. User order and the dropout / reparameterisation noise come from their own named random streams (`sampling.stream_rng`, `stream_torch_generator`), so evaluation frequency cannot change training (tested). GCN-VAE / GCN-MR-VAE will not get a loop of their own; they attach to `Trainer` as a loss term.
 
 ### `ranking.py`
 
@@ -283,7 +287,7 @@ Vectorised over a batch: `recall_at_k`, `precision_at_k`, `ndcg_at_k`, all takin
 
 For each batch it: calls the scorer; sets to −∞ the user's *training* positives (on `val`) or training **and** validation positives (on `test`); takes the top `max(topks)` by `torch.topk`; encodes `(row, item)` pairs as integers and uses `np.isin` against the ground-truth pairs to get a hit matrix; computes every metric in `ranking.py` for the overall, short-head and long-tail views; and feeds the diversity accumulator. A user counts toward the short-head average only if they have at least one short-head relevant item (the notebook's convention). Propagation happens once per evaluation, not once per batch.
 
-**Why a scorer, and why exclusion lives here.** The VAE produces scores from a decoder, not a dot product. If scoring were hard-wired, every metric would need reworking in November. With a scorer, Module 3 supplies one closure (`decoder(mu_u)` — the posterior *mean*, per Liang et al. 2018, not a sample) and nothing else changes. Exclusion stays in `evaluate` because it is part of the *protocol*: whatever the scores, known positives must not occupy top-k slots, and on the test split that includes validation positives. Excluding test items during validation would leak test knowledge into selection and is deliberately *not* done — it is why validation Recall sits below test Recall (test positives compete for slots at validation time; validation positives are masked at test time), a gap that is expected and identical across arms.
+**Why a scorer, and why exclusion lives here.** The VAE produces scores from a decoder, not a dot product. If scoring were hard-wired, every metric would need reworking in November. With a scorer, Module 3 supplies one closure (`decoder(mu_u)` — the posterior *mean*, per Liang et al. 2018, not a sample) and nothing else changes. Exclusion stays in `evaluate` because it is part of the *protocol*: whatever the scores, known positives must not occupy top-k slots, and on the test split that includes validation positives. Excluding test items during validation would leak test knowledge into selection and is deliberately *not* done, so test positives compete for slots at validation time while validation positives are masked at test time; on its own that would push validation Recall below test Recall. In practice validation Recall sits *above* test Recall (Gowalla control: 0.210 vs 0.182; Yelp: 0.114 vs 0.066), because a user has far fewer validation items than test items (Gowalla: 2.7 vs 7.3 on average) and Recall@K is easier to score against a short list. (An earlier version of this guide stated the opposite direction.) Either way the gap is protocol, identical across arms.
 
 The refactor from `evaluate(model, …)` to `evaluate(scorer, …)` was verified by running both versions on real Gowalla data: 40 metrics per split, both splits, zero differences.
 

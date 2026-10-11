@@ -1141,3 +1141,116 @@ lambda of emb_mr_dw per metric: ER 4.5e-6, np_ref 6.6e-6, Gini 9.3e-6, tail 1.5e
 - Not established: Amazon (at 1e-5 it showed better tail coverage and worse
   recall, a different pattern); why Yelp's accuracy responds to MR and Gowalla's
   does not.
+
+## Module 3, step 1: VAE-CF baseline and collapse diagnostics (11 Oct 2026)
+
+Built first because none of it depends on the open GCN-MR-VAE decisions
+(encoder input, decoder, lambda for H4). `Trainer` and every LightGCN arm are
+untouched: `audit_equivalence.py` 24/24 and the 113 earlier tests pass unchanged.
+
+**What was added.**
+- *S1, user-level batching* (`src/sampling.py`): `user_batches` (a fresh
+  permutation of the users with at least one training item, each user once per
+  epoch), `dense_rows` (CSR rows to a dense tensor built on the device). Named
+  random streams: `stream_rng(seed, 1)` for user order, a `torch.Generator` from
+  `(seed, 2)` for dropout masks and reparameterisation noise. The BPR sampler
+  keeps `default_rng(seed)`, so existing runs reproduce, and Phase 3 can draw
+  from both without one shifting the other.
+- *S2, diagnostics* (`src/models/vae.py`): `gaussian_kl`, `kl_with_free_bits`
+  (per-dimension floor, off by default), `BetaSchedule` (linear as in Liang et
+  al., constant, cyclical as in Fu et al. 2019), `latent_diagnostics` (KL summed
+  over dimensions and averaged over users -- the quantity H4 compares --,
+  per-dimension KL, active units: Var over users of the posterior mean > 0.01,
+  Burda et al. 2016). Logged at every evaluation; reported at the selected
+  checkpoint (`results.json["vae"]`) and at the last epoch.
+- *S3, VAE-CF baseline*: `MultVAE` (Mult-VAE^PR as in Liang et al.'s reference
+  code: L2-normalised input, inverted input dropout 0.5, I -> 600 -> 200 -> 600
+  -> I with tanh, multinomial likelihood, beta = min(0.2, update / 200,000),
+  Xavier weights, biases truncated normal std 0.001, Adam 1e-3, 500 users per
+  update, scoring with the posterior mean) and `src/vae_cf.py`. Run with
+  `arm=vae_cf`; folders are `runs/<ds>/vae_cf/seed<N>`.
+- `VAETerm` (GCN-VAE / GCN-MR-VAE) still raises; it waits on the encoder input.
+
+**Protocol choices.**
+- Same split, `evaluate()`, masking of known positives, validation selection on
+  Recall@20 every 10 epochs, and budget E = 1000 as every LightGCN arm.
+- The encoder sees only the *reduced* training row, for validation and test
+  scoring alike: exactly the interactions LightGCN's graph is built from.
+  Validation items never reach the model (tested by comparing the scorer with
+  an explicit training-rows forward pass).
+- Liang's annealing is per update, so on these smaller datasets the cap is
+  reached later than on theirs: around epoch 670 on Gowalla, 630 on Yelp2018
+  and 380 on Amazon-Book (60, 64 and 106 updates per epoch), all inside E.
+  Liang et al. trained 200 epochs on datasets several times larger (ML-20M:
+  ~117k training users, ~47k updates), i.e. comparable update counts. Not Liang's protocol otherwise (they hold out
+  whole users and select on NDCG@100); the comparison that matters is against
+  the other arms on this split.
+- Folder name: `_arm_tag` returns the arm name for any arm whose name starts
+  with `vae_cf` (W, K and d mean nothing for it). A variant takes its own name,
+  e.g. Liang's beta-cap tuning: `arm.name=vae_cf_cap1 arm.vae.beta.cap=1.0`; the
+  clobber guard refuses a silent overwrite. Every LightGCN folder name is
+  unchanged (tested against the composed config for six existing arms).
+- **`configs/config.yaml` is deliberately unchanged.** Hydra re-reads the config
+  files for every job of a multirun (checked: a file edited on disk during job 1
+  is what job 2 composes). A first version of this change added an argument to
+  the `arm_tag` template; applied to the working tree while a sweep was running,
+  the sweep's already-imported 8-argument resolver would have received 9
+  arguments and every remaining job would have failed (reproduced). The only
+  change under `configs/` is the new `arm/vae_cf.yaml`, so this commit can be
+  applied while a LightGCN sweep runs: the running process keeps its imported
+  code, and every config file it re-reads is unchanged.
+
+**Synthetic collapse check** (300 users x 200 items, latent 16, hidden 64,
+seed 2020, 40 epochs; pinned as a test).
+
+| beta | KL (nats) | active units | val R@20 | ER of posterior means |
+|---|---|---|---|---|
+| 0 (constant) | 18.4 | 16/16 | 0.505 | 6.7 |
+| linear to 0.2 | 11.7 | 16/16 | 0.495 | 7.2 |
+| 1 (constant) | 1.6 | 16/16 | 0.460 | 7.8 |
+| **5 (constant)** | **0.014** | **0/16** | **0.128** | **15.2** |
+| popularity | -- | -- | 0.107 | -- |
+
+The deliberately broken run collapses and the diagnostics say so: KL near
+zero, no active units, accuracy at roughly popularity. **ER of the posterior
+means does not**: it was highest in the collapsed run (in a 100-epoch run it
+was mid-range, 9.0). ER is scale-invariant and describes the shape of whatever
+residual variation remains, however small. H4 is therefore read off KL and
+active units; ER of the latent is descriptive only. The same caution applies to
+S4: the ER of the encoder *input* describes the input, not latent usage.
+
+**Real data, CPU sanity check (not a result).** Gowalla, seed 2020, 10 epochs
+on 2 CPU cores (~110 s/epoch): validation Recall@20 0.126 at epoch 5 and 0.151
+at epoch 10 (test 0.121, 0.135); KL 356 nats at beta 0.003, 200/200 active
+units; 728,432 training edges as in every other run. For scale, published
+Mult-VAE on LightGCN's split reaches 0.1641 (full training edges, converged;
+Shen et al., CIKM 2021, Table 3). Nothing about the GPU path is verified.
+
+**Verification.** 22 new tests (`tests/test_vae.py`, 135 in total): KL against
+`torch.distributions`, multinomial NLL against the explicit formula, free bits,
+all three beta schedules, active units on a constructed posterior, the
+reparameterisation identity, unbiased inverted dropout, Liang's initialisation,
+determinism of the evaluation pass and of the training pass under a fixed
+generator, user batches (coverage, shuffling, stream separation), the shared
+results schema, the encoder seeing training rows only, fresh scorer tensors,
+evaluation frequency leaving the trajectory unchanged, the checkpoint report
+using the checkpoint's own update count (scripted validation curve), free bits
+and weight decay reaching the loss, the collapse check, the folder names, and
+the CLI end to end. Mutation sweep (harness copies the repo, uses pytest's
+exit code; a harmless-edit control was not caught): **24/24 caught**, covering
+the objective, the schedules, the diagnostics, the model, the trainer wiring,
+the RNG streams and the folder name. pyflakes clean apart from the intentional
+`import src.train`. **LightGCN arms are unaffected:** `mr_off`, `emb_mr` and `emb_mr_dw` run with the
+previous commit and with this one (synthetic, CPU) give identical `history.json`,
+identical `results.json` and bit-identical `best.pt` weights; so does the queued
+MF-BPR command (`arm=mr_off model.n_layers=0`, two seeds, through the CLI).
+
+**Not verified.** Anything on the GPU: the CUDA generator, `dense_rows` on CUDA,
+memory at Amazon-Book scale (an evaluation batch of 4,096 users is ~1.5 GB per
+dense 91,599-column tensor; `eval.batch_size` can be lowered without changing
+any number), and run time. Time the first GPU run.
+
+**Doc fix.** `docs/CODEBASE_GUIDE.md` said validation Recall sits below test
+Recall. The observed direction is the opposite (Gowalla control 0.210 vs 0.182)
+because users have far fewer validation than test items (2.7 vs 7.3 on Gowalla);
+corrected.

@@ -18,6 +18,7 @@ from omegaconf import DictConfig, OmegaConf
 from .data.dataset import InteractionDataset
 from .models.lightgcn import LightGCN
 from .trainer import Trainer
+from .vae_cf import VAECFTrainer, build_vae_cf
 from .utils import get_device, set_seed
 
 
@@ -31,6 +32,15 @@ def _arm_tag(name: str, lam: float, k: int, scale: str, warmup: int,
     single folder before these were added. `_assert_no_clobber` is the general
     backstop for anything not encoded here.
     """
+    if str(name).startswith("vae_cf"):
+        # VAE-CF baseline: no LightGCN, no warm-up, no manifold term, so W/K/d
+        # would only mislead. The folder is the arm name; a variant (e.g. Liang's
+        # beta-cap tuning) takes its own name: arm.name=vae_cf_cap1
+        # arm.vae.beta.cap=1.0. The clobber guard refuses a silent overwrite.
+        # (Deliberately not a new template argument: Hydra re-reads config.yaml
+        # for every job of a multirun, so changing the template would crash a
+        # sweep that is running from the same working tree.)
+        return str(name)
     lam = float(lam)
     tag = f"{name}_w{int(warmup)}"
     if lam > 0:
@@ -127,12 +137,17 @@ def main(cfg: DictConfig) -> float:
                             val_frac=float(cfg.split.val_frac), split_seed=int(cfg.split.split_seed),
                             min_train=int(cfg.split.min_train), short_head_frac=float(cfg.split.short_head_frac),
                             popularity_from=str(cfg.split.popularity_from))
-    graph = ds.sparse_graph(device)
-    model = LightGCN(ds.n_users, ds.n_items, dim=int(cfg.model.dim), n_layers=int(cfg.model.n_layers),
-                     init_std=float(cfg.model.init_std), graph=graph)
-
+    family = str(cfg.arm.get("family", "lightgcn"))
     wb = _maybe_wandb(cfg, run_dir)
-    trainer = Trainer(cfg, ds, model, device, run_dir, wandb_run=wb)
+    if family == "vae_cf":
+        trainer = VAECFTrainer(cfg, ds, build_vae_cf(cfg, ds.n_items), device, run_dir, wandb_run=wb)
+    elif family == "lightgcn":
+        graph = ds.sparse_graph(device)
+        model = LightGCN(ds.n_users, ds.n_items, dim=int(cfg.model.dim), n_layers=int(cfg.model.n_layers),
+                         init_std=float(cfg.model.init_std), graph=graph)
+        trainer = Trainer(cfg, ds, model, device, run_dir, wandb_run=wb)
+    else:
+        raise ValueError(f"arm.family={family!r}; expected lightgcn|vae_cf")
     result = trainer.run()
     if wb is not None:
         wb.finish()

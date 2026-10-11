@@ -1,0 +1,34 @@
+# @package arm
+# VAE-CF baseline: Mult-VAE^PR (Liang et al., WWW 2018), committed baseline
+# (qualification §4.3.2). Consumes the raw training row r_u; no LightGCN, no
+# manifold term, no warm-up. Runs on the same split, budget (epochs) and
+# validation selection as every other arm. Hyperparameters are the paper's /
+# reference code's. See src/vae_cf.py.
+#
+# The keys below `family` exist only so the shared config template (arm_tag,
+# clobber guard) resolves; they are fixed and must stay at these values.
+name: vae_cf
+family: vae_cf
+warmup_epochs: 0
+lambda_manifold: 0.0
+laplacian: none
+k_neighbors: 20
+rebuild_every: 0
+lambda_scale: none
+knn_backend: torch      # used by the NP_ref measurement only
+sigma: null
+vae:
+  hidden: 600
+  latent: 200
+  dropout: 0.5          # input dropout; survivors scaled by 1/(1-dropout)
+  batch_size: 500       # users per update
+  lr: 1.0e-3
+  weight_decay: 0.0     # lam * sum ||W||^2; the reference code uses 0 for Mult-VAE
+  beta:
+    schedule: linear    # linear (Liang) | constant | cyclical (Fu et al. 2019)
+    cap: 0.2            # Mult-VAE^PR cap
+    anneal_steps: 200000   # linear: beta = min(cap, update / anneal_steps)
+    cycle_steps: 10000  # cyclical only
+    ratio: 0.5          # cyclical only
+  free_bits: 0.0        # per-dimension KL floor (Kingma et al. 2016); 0 = off
+  au_threshold: 0.01    # active units: Var_u(mu_ud) > threshold (Burda et al. 2016)

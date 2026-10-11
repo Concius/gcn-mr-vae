@@ -1,4 +1,4 @@
-# Handoff — state of the project, 10 Oct 2026 (λ re-sweep done on Gowalla and Yelp)
+# Handoff — state of the project, 11 Oct 2026 (Module 3 step 1: VAE-CF baseline and diagnostics)
 
 ## Project
 - MSc dissertation **GCN-MR-VAE** (LightGCN + Manifold Regularization + VAE for
@@ -18,6 +18,8 @@
   session; check progress from another terminal (`tail -5 runs/<log>`). Copying a
   tmux pane with select-all produces misleading interleaved lines.
 - Downloads re-save as `name (1).zip`; quote such paths, and the unsuffixed file may be stale.
+- Hydra re-reads `configs/` for every job of a multirun. Never change files under `configs/`
+  (git am, pull, checkout, edits) in the working tree a sweep is running from.
 - Training never downloads data (`python -m src.data.download <ds>`); `run_gate.sh` checks.
 - Clobber guard: an identical config re-run overwrites its own folder; a different config
   into the same folder is refused. Variants of one config need `paths.run_dir=...`.
@@ -29,16 +31,20 @@
 ## Repository
 - One `Trainer` for every arm; composable loss; Hydra configs; arms `baseline`, `mr_off`,
   `emb_mr`, `coocc_mr`, `emb_mr_fresh`, `emb_mr_dw`, `emb_mr_dw_weaken`, `emb_mr_dw_repel`.
-- 113 tests; `audit_equivalence.py` 24/24 against the notebook (CPU, exact). Mutation
+- 135 tests (22 for Module 3 step 1); `audit_equivalence.py` 24/24 against the notebook (CPU, exact). Mutation
   sweeps (harness validated with controls): 42/42 guarantees on 3 Oct, plus 15/15 for the
-  pair-split code and 21/21 for the λ-sweep analysis on 4 Oct; the GPU RNG coercion is
-  untestable on CPU (a no-op there).
+  pair-split code and 21/21 for the λ-sweep analysis on 4 Oct, 24/24 for Module 3 step 1 on
+  11 Oct; the GPU RNG coercion is untestable on CPU (a no-op there).
+- Module 3 so far: `arm=vae_cf` (Mult-VAE^PR baseline, `src/vae_cf.py`), collapse
+  diagnostics in `src/models/vae.py`, user batches and named RNG streams in `src/sampling.py`.
+  `VAETerm` (GCN-VAE / GCN-MR-VAE) not built. CPU-verified only.
 - Analysis: `analysis/summarize.py` (groups by run directory, `--dataset`, refuses
   ambiguous arm names), `analysis/compare_kernel.py` and `analysis/compare_split.py`
   and `analysis/lambda_sweep.py` (pre-registered), `analysis/tier0.py`,
   `analysis/crossover_check.py` (CPU), `analysis/config_diff.py` (does a new command
   reproduce an existing run's config? run before reusing old runs).
-- On Gowalla the bare name `emb_mr` matches several configurations: use exact tags.
+- On Gowalla the bare name `emb_mr` matches several configurations: use exact tags. Once the
+  MF-BPR runs exist, the same holds for `mr_off` on every dataset (`mr_off_w100_K3_d256` vs `_K0_`).
 
 ## Results
 
@@ -150,9 +156,15 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
 4. **CoOcc-MR (maybe)** — λ=1e-4 (notebook cell 19). np_ref is circular for it (both built
    from R); judge on ER and Recall or pick another external reference.
 5. If MR cannot be fixed: a uniformity term (DirectAU) or stable-rank regularisation (Loveland).
-6. **Module 3:** Mult-VAE^PR (not in PyTorch) as the VAE-CF baseline and template; trainer
-   seams B2/B3 from `VAE_ROADMAP.md`; then GCN-VAE and GCN-MR-VAE; H4 budget-matched,
-   10 seeds, KL / active-unit logging.
+6. **Module 3:** ~~S1–S3 (user batches, diagnostics, Mult-VAE^PR / VAE-CF baseline)~~ — done
+   11 Oct on CPU; first GPU job: `arm=vae_cf` on the three datasets (10 seeds), sanity
+   against published Mult-VAE (LightGCN split: Gowalla 0.1641, Yelp 0.0584, Amazon 0.0407,
+   full training edges). Next: S4, `VAETerm`, Phase 3 (see the proposals in
+   `VAE_ROADMAP.md`), the H4 pre-registration committed before any Phase-3 run.
+6b. **Running / queued (started 11 Oct):** Amazon `emb_mr` λ=1e-4, 10 seeds (~45 h; H4 input
+   and a third Amazon dose-response point); then MF-BPR (`arm=mr_off model.n_layers=0`,
+   3 datasets × 10 seeds). Full Amazon sweep only if validation recall at 1e-5 or 1e-4
+   beats λ = 0.
 7. **Writing:** Chapter 5 rewrite (Jan–Feb). §6.3's diversity fallback no longer holds;
    §6.5's "MR produz ganhos nos três datasets" is false under the corrected protocol;
    §6.4's differentiable diversity terms become the natural follow-up.
@@ -163,6 +175,8 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
   smallest exact p is 2/1024, so Holm can reject nothing in a family of more than 25
   tests; an "all tests" family is unusable for the 35-test Yelp sweep.
 - GCN-MR-VAE encoder input: raw interaction vector or LightGCN/MR user embedding.
+  Proposed 11 Oct: user rows of the propagated Z, tied decoder, equalised input norm;
+  H4 primary at λ = 1e-4 (details in `VAE_ROADMAP.md`). Not yet adopted.
 - Whether to run `emb_mr_fresh` on Yelp/Amazon (currently assumed freshness ~4% transfers).
 - Module-2 framing, to discuss with Pedronette — now concrete: H2 and H3 are contradicted
   on Gowalla and Yelp at every λ (geometry and diversity worse, monotone in λ). The
@@ -187,6 +201,9 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
 - `emb_mr_dw` as dominated on np_ref beyond Gowalla: the Yelp primary is n.s.
   (p = 0.065) with a failed ER match; Yelp supports only "worse on diversity".
 - The pair-split attribution beyond Gowalla.
+- ER of the VAE latent (posterior means) as a collapse measure: scale-invariant, and highest
+  in the deliberately collapsed synthetic run. Use KL and active units.
+- Anything about the VAE on the GPU before it has run there.
 
 ## `runs/` map
 - `<ds>/mr_off_w100_K3_d256`, `<ds>/emb_mr_w100_lam1e-05_k20_r50_K3_d256` — corrected gate,
@@ -206,6 +223,8 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
 - `yelp2018/emb_mr_w100_lam{1e-06,3e-06,3e-05,0.0001,0.0003,0.001,4.5e-06}_k20_r50_K3_d256`
   — λ sweep (10 seeds each); `lambda_sweep_yelp.log`, `lambda_ext_yelp.log`,
   `lambda_stage2_yelp.log`, `_lambda_sweep/yelp2018_curve.csv`.
+- `amazon-book/emb_mr_w100_lam0.0001_k20_r50_K3_d256` — running from 11 Oct (`amazon_lam1e-4.log`);
+  then `<ds>/mr_off_w100_K0_d256` (MF-BPR, `mfbpr.log`). Coming: `<ds>/vae_cf`.
 - `gowalla/emb_mr_dw_{weaken,repel}_w100_lam1e-05_k20_r50_K3_d256` — pair-split, 10 seeds;
   `split.log`. `_crossover_check/checkpoints.csv` and `crossover_check.log` — pre-check.
 

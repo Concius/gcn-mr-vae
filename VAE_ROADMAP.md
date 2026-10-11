@@ -1,5 +1,29 @@
-# Module 3 (VAE) — readiness assessment and roadmap
-
+> **Status, 11 Oct 2026.** Done: B1 (scorer seam), S1 (user-level batching
+> with its own random streams), S2 (KL, per-dimension KL, active units, beta
+> logging), S3 (Mult-VAE^PR as the VAE-CF baseline, `arm=vae_cf`), and the
+> synthetic collapse check (beta = 5 collapses and the diagnostics report it).
+> Details and verification in `MIGRATION.md` ("Module 3, step 1"). Open: S4,
+> `VAETerm` for GCN-VAE / GCN-MR-VAE, and B2/B3.
+>
+> **Proposed 11 Oct, not yet adopted** (see the Part 3 discussion; to confirm
+> with Pedronette where he has a view):
+> - *Phase 3 as a separate stage* that loads a Phase-2 `best.pt`, instead of a
+>   phase list in the trainer. Every Phase-2 checkpoint H4 needs already exists
+>   (Gowalla and Yelp at every swept lambda, Amazon at 0 and 1e-5; Amazon 1e-4
+>   running). B2 becomes unnecessary; B3 shrinks to two param groups inside
+>   Phase 3 (LightGCN frozen for the 20 VAE epochs, reduced LR for the 10 joint
+>   ones). `best.pt` has no optimiser state, so Adam restarts in both arms
+>   (symmetric). Record the start epochs and check they do not differ
+>   systematically between arms.
+> - *Encoder input*: the user rows of the propagated Z (256-d); decoder tied to
+>   the item rows of Z under the multinomial likelihood; inputs rescaled to the
+>   same mean row norm in both arms. Raw r_u is the VAE-CF baseline.
+> - *lambda for H4*: pre-registered primary at 1e-4, with 1e-5 and the
+>   qualification's selection rule (validation Recall@20 of the full pipeline
+>   over {0, 1e-5, 1e-4}) as secondaries; descriptive curve over every lambda
+>   with checkpoints; 10 seeds; two-sided; Holm across datasets x {KL, recall}.
+> - H4 is read off KL and active units, never ER of the latent (see S2 below).
+>
 > **Status, 3 Oct 2026.** This roadmap was written on 11 Sep, before the
 > corrected Module-2 results. Its engineering plan (seams B2/B3, synthetic
 > first, KL logging for H4) still stands. What changed: Module 2 is finished
@@ -86,13 +110,15 @@ LightGCN-only.
 
 ## Smaller gaps
 
-**S1. No user-level batching.** VAE-CF reconstruction is a multinomial
+**S1. No user-level batching. — DONE 11 Oct 2026** (`sampling.user_batches`, `stream_rng`, `stream_torch_generator`).
+ VAE-CF reconstruction is a multinomial
 likelihood over the user's interaction vector `r_u`. `src/sampling.py` yields
 `(u, pos, neg)` triples. Need an iterator over `UserItemNet` rows. Not hard —
 but it is a second sampling stream, so it needs its own seeded generator to
 preserve the RNG hygiene the port established.
 
-**S2. No collapse diagnostics — and H4 is *defined* by one of them.**
+**S2. No collapse diagnostics — and H4 is *defined* by one of them. — DONE 11 Oct 2026** (`models/vae.py::latent_diagnostics`, logged every evaluation). Finding from the synthetic check: ER of the posterior means is *not* a collapse diagnostic (scale-invariant; in the 40-epoch check the collapsed run had the highest ER of four settings).
+
 §1.2.2: H4 is validated by "divergência de Kullback-Leibler mais alta que a do
 pipeline sem a camada" **and** Recall@20 superior. So KL is not a debugging
 aid, it is a reported result. Needed from epoch 1: total KL, **per-dimension
@@ -100,7 +126,8 @@ KL**, active units (Burda), and the β schedule value. §6.3 commits to KL
 annealing if collapse appears, and to reporting collapse as a finding if it
 persists.
 
-**S3. No VAE-CF baseline model.** VAE-CF (Liang et al. 2018) consumes sparse
+**S3. No VAE-CF baseline model. — DONE 11 Oct 2026** (`MultVAE`, `src/vae_cf.py`, `arm=vae_cf`).
+ VAE-CF (Liang et al. 2018) consumes sparse
 `r_u` directly — it is *not* LightGCN with the VAE attached. Separate model
 class. It is a committed baseline (see below).
 
@@ -149,7 +176,7 @@ with diagnostics good enough to say *why*.
 ### Phase C — December to January: experiments
 
 9. **The H4 pair**: `gcn_vae` (no manifold term) vs `gcn_mr_vae`, both branching
-   from the same Phase-2 checkpoint, both same budget, 5 seeds. Report KL and
+   from the same Phase-2 checkpoint, both same budget, 10 seeds. Report KL and
    Recall@20 — that is H4's stated criterion, both halves.
 10. **Remaining baselines**: VAE-CF (S3) and MF-BPR (already supported).
 11. **Ablations**: λ_manifold, k, rebuild frequency (§4.2.3 commits to these).

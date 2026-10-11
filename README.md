@@ -39,7 +39,8 @@ python -m src.train -m dataset=gowalla arm=mr_off,emb_mr seed=2020,2021,2022,202
 
 # anything is overridable from the command line
 python -m src.train dataset=yelp2018 arm=emb_mr seed=2021 arm.lambda_manifold=1e-4 arm.k_neighbors=10
-python -m src.train dataset=gowalla arm=baseline model.n_layers=0     # MF-BPR
+python -m src.train dataset=gowalla arm=mr_off model.n_layers=0       # MF-BPR (same selection window as the LightGCN control)
+python -m src.train dataset=gowalla arm=vae_cf                          # VAE-CF baseline (Mult-VAE^PR)
 python -m src.train -m dataset=gowalla arm=emb_mr seed=2020 arm.lambda_manifold=1e-6,1e-5,1e-4   # sweep
 
 # results
@@ -57,6 +58,7 @@ Each run writes `runs/<dataset>/<arm>/seed<seed>/{config.yaml, history.json, bes
 | `mr_off`   | 100                | BPR to epoch E      | none (control)         |
 | `emb_mr`   | 100                | BPR + MR to epoch E | k-NN on embeddings, rebuilt every 50 |
 | `coocc_mr` | 100                | BPR + MR to epoch E | fixed, from R (GRALS-style) |
+| `vae_cf`   | —                  | Mult-VAE^PR to epoch E (no LightGCN) | none |
 
 Every arm trains for exactly `epochs` (default 1000). `mr_off` and `emb_mr`
 differ in one config value (`arm.lambda_manifold`); their first 100 epochs are
@@ -87,10 +89,11 @@ influences selection. Validation items are excluded from the adjacency.
 configs/       Hydra: config.yaml, dataset/*.yaml, arm/*.yaml
 src/
   data/        dataset.py (loader + val split + graph), splits.py, download.py, synthetic.py
-  models/      lightgcn.py, mr_layer.py (Laplacians, manifold loss), losses.py (composable), vae.py (interface, TODO)
+  models/      lightgcn.py, mr_layer.py (Laplacians, manifold loss), losses.py (composable), vae.py (Mult-VAE^PR, KL / active-unit diagnostics; GCN-VAE term still TODO)
   metrics/     ranking.py (NDCG fixed), diversity.py, geometry.py (ER, NP, NP_ref), evaluate.py
-  sampling.py  BPR negative sampling
-  trainer.py   one trainer for all arms
+  sampling.py  BPR negative sampling; user-level batches and named RNG streams (Module 3)
+  trainer.py   one trainer for all LightGCN arms
+  vae_cf.py    the VAE-CF baseline's trainer (same split, evaluate() and selection)
   train.py     entry point
 analysis/      summarize.py: collect results, paired Wilcoxon (Holm across datasets)
 scripts/       run_gate.sh, run_sweep.sh, run_tests.sh
