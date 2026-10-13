@@ -1254,3 +1254,37 @@ any number), and run time. Time the first GPU run.
 Recall. The observed direction is the opposite (Gowalla control 0.210 vs 0.182)
 because users have far fewer validation than test items (2.7 vs 7.3 on Gowalla);
 corrected.
+
+## Amazon-Book at lambda = 1e-4 (11-13 Oct 2026)
+
+`emb_mr` at lambda = 1e-4, 10 seeds (2020-2029), corrected gate configuration,
+commit aea7013 (LightGCN code identical to 75c0a5e). Run because H4 needs the
+point, and as a third Amazon dose-response point. The rule declared before
+running: the full Amazon sweep runs only if validation recall@20 at 1e-5 or
+1e-4 beats lambda = 0. Analysis: paired two-sided exact Wilcoxon against
+`mr_off`, Holm across the two lambdas within each metric.
+
+| metric | lambda = 0 | 1e-5 | 1e-4 | 1e-4 vs 0 |
+|---|---|---|---|---|
+| val recall@20 | 0.13669 | 0.13608 (-0.4%, 10/10 lower) | 0.12730 | -6.9%, 10/10 lower |
+| test recall@20 | 0.04641 | 0.04624 (-0.4%, 10/10 lower) | 0.04487 | -3.3%, 10/10 lower |
+| test ndcg@20 | 0.03614 | 0.03599 (-0.4%, 10/10) | 0.03480 | -3.7%, 10/10 lower |
+| ER_tab | 240.969 | 240.147 (10/10 lower) | 233.398 | -3.1%, 10/10 lower |
+| np_ref@20 | 0.33646 | 0.32980 (10/10 lower) | 0.28866 | -14.2%, 10/10 lower |
+| gini@20 | 0.91560 | 0.91534 (9/10 lower, Holm 0.027) | 0.91155 | -0.44% (better), 10/10 |
+| tail_catalog_coverage@20 | 0.30849 | 0.31041 (10/10 higher) | 0.32595 | +5.7% (better), 10/10 |
+
+Every 10/10 result has p = 0.002 (Holm 0.004).
+
+**Reading.**
+- Sweep trigger: **not fired**. Validation recall is lower at both lambdas
+  (10/10), so among {0, 1e-5, 1e-4} the qualification's rule selects lambda = 0.
+- Geometry falls as on Gowalla and Yelp (ER -3.1%, np_ref -14% at 1e-4).
+- **H3's criterion is met on Amazon** at both lambdas (Gini lower and tail
+  coverage higher, both significant), with lower accuracy (recall -0.4% and
+  -3.3%). Diversity improves while ER and np_ref fall, so the gain does not come
+  through better geometry; it looks like an accuracy-diversity trade-off.
+- The recall cost at 1e-4 is larger than on Gowalla (-0.7%) or Yelp (+0.65%).
+  Untested reading: lambda acts per minibatch and Amazon has ~66 batches per
+  epoch against 23 (Gowalla) and 34 (Yelp), so the same lambda is ~3x stronger
+  per epoch. Relevant to the lambda choice for H4 (`lambda_scale=per_epoch`).

@@ -111,6 +111,12 @@
    **p = 0.065, n.s.**; Gini and tail worse (9/1, Holm 0.012); recall n.s.
    Curves in `runs/_lambda_sweep/yelp2018_curve.csv`; details in `MIGRATION.md`.
 
+11. **Amazon at λ = 1e-4 (10 seeds, 11–13 Oct).** Validation and test recall lower at both
+   1e-5 and 1e-4 (10/10; test −0.4% and −3.3%), so the selection rule picks λ = 0 among
+   {0, 1e-5, 1e-4} and the declared full-sweep trigger did **not** fire. ER −3.1%, np_ref
+   −14% at 1e-4 (10/10). Gini lower and tail coverage higher at both λ (tail +5.7% at
+   1e-4, 10/10): H3's criterion is met on Amazon, with an accuracy cost and worse geometry.
+
 ### Working hypothesis (Tier 0, exploratory, uncorrected — not a conclusion)
 On all three datasets (10/10 seeds), Emb-MR's changes look like an alignment force
 (alignment better, uniformity worse, rank lower), and the differentiable kernel appears to
@@ -195,7 +201,8 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
 - That no net-repulsive pairs remain late in training: the logged share undercounts.
 - That net-repulsive pairs play no part: repel − fresh is +0.12 ER, 10/10.
 - `emb_mr_dw` as an improvement over MR: at equal ER it is worse than weaker `emb_mr`.
-- Any λ > 0 as selected on Gowalla; the λ-sweep results on Amazon.
+- Any λ > 0 as selected on Gowalla or Amazon; a full λ sweep on Amazon (only 0, 1e-5, 1e-4 ran).
+- H3 on Amazon as a geometric effect: diversity improves while ER and np_ref fall.
 - That MR's Yelp recall gain comes with better geometry: at λ\* ER, np_ref and diversity
   are all worse (10/10).
 - `emb_mr_dw` as dominated on np_ref beyond Gowalla: the Yelp primary is n.s.
@@ -223,7 +230,7 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
 - `yelp2018/emb_mr_w100_lam{1e-06,3e-06,3e-05,0.0001,0.0003,0.001,4.5e-06}_k20_r50_K3_d256`
   — λ sweep (10 seeds each); `lambda_sweep_yelp.log`, `lambda_ext_yelp.log`,
   `lambda_stage2_yelp.log`, `_lambda_sweep/yelp2018_curve.csv`.
-- `amazon-book/emb_mr_w100_lam0.0001_k20_r50_K3_d256` — running from 11 Oct (`amazon_lam1e-4.log`);
+- `amazon-book/emb_mr_w100_lam0.0001_k20_r50_K3_d256` — 10 seeds, done 13 Oct (`amazon_lam1e-4.log`);
   then `<ds>/mr_off_w100_K0_d256` (MF-BPR, `mfbpr.log`). Coming: `<ds>/vae_cf`.
 - `gowalla/emb_mr_dw_{weaken,repel}_w100_lam1e-05_k20_r50_K3_d256` — pair-split, 10 seeds;
   `split.log`. `_crossover_check/checkpoints.csv` and `crossover_check.log` — pre-check.
