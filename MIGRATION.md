@@ -1406,3 +1406,45 @@ equalised); the guide now says so.
 - Yelp and Amazon tuning not yet decided. Options: the same grid on each, about
   7 h on Yelp and 24 h or more on Amazon; or a reduced grid around the Gowalla
   winner.
+
+**Interruption (14 Oct).** A power cut stopped the grid during job 8
+(`d0.2_b0.8`), with 7 of 12 finished at commit 1ce8910. The remaining five run
+again from scratch at the next commit. That commit changes only analysis
+scripts and docs, so the training code is identical. Re-running an identical
+config over the partial folder is allowed by the clobber guard and overwrites
+it (checked on synthetic data).
+
+Partial results (seed 2020, validation selection). "Test peak" is a diagnostic
+and is not reportable.
+
+| dropout | beta | best ep | val R@20 | test R@20 | test N@20 | test peak (ep) | KL | AU |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 0.8 | 30 | 0.1751 | 0.1496 | 0.1157 | 0.1530 (20) | 21.8 | 188 |
+| 0 | 0.6 | 20 | 0.1734 | 0.1486 | 0.1159 | 0.1486 (20) | 23.6 | 199 |
+| 0.2 | 0.6 | 30 | 0.1719 | 0.1491 | 0.1149 | 0.1521 (20) | 24.6 | 200 |
+| 0.2 | 0.4 | 20 | 0.1699 | 0.1466 | 0.1130 | 0.1466 (20) | 28.9 | 200 |
+| 0 | 0.4 | 20 | 0.1691 | 0.1429 | 0.1095 | 0.1429 (20) | 32.4 | 200 |
+| 0.2 | 0.2 | 20 | 0.1658 | 0.1384 | 0.1045 | 0.1424 (10) | 48.6 | 200 |
+| 0 | 0.2 | 20 | 0.1610 | 0.1334 | 0.1008 | 0.1379 (10) | 53.9 | 200 |
+| *defaults: 0.5, linear to 0.2* | | 470 | 0.1578 | 0.1278 | 0.0956 | 0.1348 (10) | 71.8 | 93 |
+
+- Every finished configuration beats the defaults: test +4% to +17%.
+- Validation ranks the seven configurations almost as test does (Spearman 0.96).
+  So the problem found above is late selection *within* a run, not the
+  choice between configurations.
+- Within-run selection costs at most 3.3% of test recall here, against 5% at
+  the defaults.
+- KL falls as beta rises (53.9 to 21.8), with the first inactive units at
+  beta 0.8 (188/200 active). For H4: KL depends strongly on beta, so arms
+  compared on KL must share beta.
+
+**Extension, declared 14 Oct after seeing 7 of the 12 results.** The best
+validation so far sits at the grid's beta edge (0.8, dropout 0), and validation
+rises monotonically with beta at both finished dropouts. So:
+
+- beta = 1.0 is added at all three dropouts, queued after the remaining five.
+  That makes a 3 x 5 grid; selection is the highest validation Recall@20 over
+  all 15.
+- If the winner is at beta = 1.0, beta is extended in steps of 0.2 at that
+  dropout until the best is interior (as in the lambda sweep's boundary rule).
+- The published grid stops at 0.8. Its winner is reported as well.
