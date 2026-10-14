@@ -147,9 +147,11 @@ gcn-mr-vae/
 │   ├── crossover_check.py net-repulsive share at saved checkpoints, exact vs sphere rule
 │   ├── lambda_sweep.py   the pre-registered λ re-sweep (selection, dose-response, yardstick)
 │   ├── config_diff.py    would a command reproduce an existing run's config?
+│   ├── split_check.py    is a benchmark's test file a random per-user holdout? (item dispersion)
+│   ├── vae_val_test.py   validation vs test along one VAE-CF trajectory, list size and masking equalised
 │   └── tier0.py          interpretation: trajectory, norms/angles, alignment/uniformity, spectrum
 ├── scripts/            run_gate.sh, run_sweep.sh, run_tests.sh
-├── tests/              135 automated tests (see Part 7 and MIGRATION.md)
+├── tests/              139 automated tests (see Part 7 and MIGRATION.md)
 ├── audit_equivalence.py    proves the port matches the notebook numerically
 ├── docs/               this guide
 ├── MIGRATION.md        cell-by-cell map from the notebook, fix log, audit log
@@ -287,7 +289,7 @@ Vectorised over a batch: `recall_at_k`, `precision_at_k`, `ndcg_at_k`, all takin
 
 For each batch it: calls the scorer; sets to −∞ the user's *training* positives (on `val`) or training **and** validation positives (on `test`); takes the top `max(topks)` by `torch.topk`; encodes `(row, item)` pairs as integers and uses `np.isin` against the ground-truth pairs to get a hit matrix; computes every metric in `ranking.py` for the overall, short-head and long-tail views; and feeds the diversity accumulator. A user counts toward the short-head average only if they have at least one short-head relevant item (the notebook's convention). Propagation happens once per evaluation, not once per batch.
 
-**Why a scorer, and why exclusion lives here.** The VAE produces scores from a decoder, not a dot product. If scoring were hard-wired, every metric would need reworking in November. With a scorer, Module 3 supplies one closure (`decoder(mu_u)` — the posterior *mean*, per Liang et al. 2018, not a sample) and nothing else changes. Exclusion stays in `evaluate` because it is part of the *protocol*: whatever the scores, known positives must not occupy top-k slots, and on the test split that includes validation positives. Excluding test items during validation would leak test knowledge into selection and is deliberately *not* done, so test positives compete for slots at validation time while validation positives are masked at test time; on its own that would push validation Recall below test Recall. In practice validation Recall sits *above* test Recall (Gowalla control: 0.210 vs 0.182; Yelp: 0.114 vs 0.066), because a user has far fewer validation items than test items (Gowalla: 2.7 vs 7.3 on average) and Recall@K is easier to score against a short list. (An earlier version of this guide stated the opposite direction.) Either way the gap is protocol, identical across arms.
+**Why a scorer, and why exclusion lives here.** The VAE produces scores from a decoder, not a dot product. If scoring were hard-wired, every metric would need reworking in November. With a scorer, Module 3 supplies one closure (`decoder(mu_u)` — the posterior *mean*, per Liang et al. 2018, not a sample) and nothing else changes. Exclusion stays in `evaluate` because it is part of the *protocol*: whatever the scores, known positives must not occupy top-k slots, and on the test split that includes validation positives. Excluding test items during validation would leak test knowledge into selection and is deliberately *not* done, so test positives compete for slots at validation time while validation positives are masked at test time; on its own that would push validation Recall below test Recall. In practice validation Recall sits *above* test Recall (Gowalla control: 0.210 vs 0.182; Yelp: 0.114 vs 0.066; Amazon: 0.137 vs 0.046). Earlier versions of this guide first stated the opposite direction, then put the gap down to list length (a user has fewer validation than test items: Gowalla 2.7 vs 7.3). Measured on 14 Oct 2026, list length is not the reason. Along a VAE-CF trajectory on Gowalla (`analysis/vae_val_test.py`), equalising the list sizes and making the masking symmetric leaves the validation/test ratio unchanged (1.15 both ways at epoch 20), and test items competing at validation time cost validation Recall a near-constant 2.5–3%. What differs is *which* items are held out: the benchmark test files are not random per-user holdouts (`analysis/split_check.py`; §4.4). The gap is the same for every arm, so paired comparisons are unaffected.
 
 The refactor from `evaluate(model, …)` to `evaluate(scorer, …)` was verified by running both versions on real Gowalla data: 40 metrics per split, both splits, zero differences.
 
@@ -349,11 +351,19 @@ The pre-registered λ re-sweep. Stage 1 reads `emb_mr` at every grid λ plus `mr
 
 Composes the configuration a `src.train` command would run (nothing is trained) and compares it key by key with the configuration stored in an existing run's `results.json`, ignoring `paths.*`. Run it before reusing old runs as arms or controls of a new experiment: any difference beyond the intended ones means the runs are not comparable. `python -m analysis.config_diff <run_dir> <overrides...>`.
 
-## 3.17 `scripts/`
+## 3.17 `analysis/split_check.py`
+
+Checks, from the files alone, whether a benchmark's `test.txt` behaves like a uniformly random per-user holdout, which is what our validation set is. Statistic: the item dispersion index D = mean_i (b_i − p m_i)² / (m_i p (1 − p)), with m_i an item's interactions in train + test, b_i those in test and p the test share. A random per-user split gives D ≈ 1; the script measures that reference by redrawing every user's test items from the user's own items (same sizes) rather than assuming it. Also reports the training popularity of test items against a random 10% of training items. Seconds on CPU. `python -m analysis.split_check [--root data] [datasets...]`. Results: §4.4.
+
+## 3.18 `analysis/vae_val_test.py`
+
+Trains one VAE-CF run exactly as `src.train` would (same composed config, `set_seed`, `build_vae_cf`, `VAECFTrainer.train_epoch`; tested to reproduce `src.train`'s history) and, at chosen epochs, reads one set of scores five ways: the protocol's validation and test Recall@20; test Recall with Liang et al.'s denominator min(20, n_rel) and NDCG@20; validation Recall with test items also masked (`val_clean`); and test Recall on a fixed random subset of each user's test items sized like their validation list, with the other held-out items masked (`test_matched`). `val_clean` and `test_matched` differ only in where the relevant items come from. `python -m analysis.vae_val_test --at 1,5,10,20,50 --out runs/_vae_val_test/<name>.json dataset=gowalla arm=vae_cf seed=2020 [overrides]`. About 2 minutes per epoch on 2 CPU cores for Gowalla; seconds on the GPU.
+
+## 3.19 `scripts/`
 
 `run_gate.sh` launches the September gate (two arms × five seeds on Gowalla) and summarises. `run_sweep.sh` does all three datasets. `run_tests.sh` is `pytest tests -q`. All accept extra Hydra overrides as arguments.
 
-## 3.18 `tests/` and `audit_equivalence.py`
+## 3.20 `tests/` and `audit_equivalence.py`
 
 Described in Part 7.
 
@@ -415,6 +425,36 @@ The remaining tax can still be measured directly if you want the number for
 the text: run `arm=baseline` once with `split.val_frac=0 eval.select_split=test`
 (the notebook protocol; the trainer prints a warning) and once with defaults,
 same seed.
+
+**What validation is a proxy for (measured 14 Oct 2026).** The validation set
+is a uniformly random 10% of each user's training items, the procedure NGCF
+describes for these benchmarks (a random 80/20 split per user, then 10% of
+training for validation). The test files do not behave like such a holdout.
+`analysis/split_check.py`:
+
+| | item dispersion D, test file | D, simulated random split (3 draws) | val / test Recall@20, LightGCN control |
+|---|---|---|---|
+| Gowalla | 1.79 | 1.00–1.01 | 0.210 / 0.182 = 1.15 |
+| Yelp2018 | 4.08 | 0.99–1.00 | 0.114 / 0.066 = 1.73 |
+| Amazon-Book | 6.71 | 1.00–1.01 | 0.137 / 0.046 = 2.95 |
+
+Some items sit in the test file far more, or less, often than a random split
+would put them there (the files carry no timestamps, so what produced this is
+unknown), and the validation/test gap grows in the same order as D. Three
+datasets, so this is an association, not a demonstration. What follows for the
+protocol:
+
+- Validation and test numbers are not on the same scale; never compare them
+  across splits.
+- Validation is a sound selector when a model gets better or worse on both
+  splits together. In the λ sweeps they moved in the same direction (Yelp at
+  λ\*: +1.2% / +0.65%; Amazon at 1e-4: −6.9% / −3.3%).
+- It can miss a decline that is confined to test items. VAE-CF on Gowalla after
+  epoch ~20: validation flat, test −5% (MIGRATION.md, "VAE-CF on Gowalla:
+  diagnosing the gap").
+- Arm-vs-arm comparisons stay paired on identical data, and every arm faces the
+  same split. The protocol stands; this is a property of the benchmarks, to be
+  reported as such.
 
 ## 4.5 Rule 4 — one variable at a time
 
@@ -670,7 +710,7 @@ The numbers will move. Expect: lower absolute Recall (90% of edges; no selection
 
 ## 7.1 The test suite
 
-`python -m pytest tests -q` — 29 tests, about 10 seconds on CPU.
+`python -m pytest tests -q` — 139 tests, about 30 seconds on CPU. The table lists the original files and the two added on 14 Oct 2026; the others are described where they were added, in MIGRATION.md.
 
 | file | what it pins down |
 |---|---|
@@ -679,6 +719,8 @@ The numbers will move. Expect: lower absolute Recall (90% of edges; no selection
 | `test_split.py` | validation split deterministic, disjoint from train; users below `min_train` untouched; `val_frac=0` = no split |
 | `test_smoke.py` | every arm runs end-to-end; `mr_off` and `emb_mr` produce identical warm-up curves and identical ER at the transition; warm-start save→load resumes with the correct budget; selection on test only when explicitly asked; **W = 0 captures the initial reference** (regression for defect 9); both ER conventions reported; popularity segmentation independent of `val_frac` |
 | `test_scorer.py` | default scorer = inline dot product; a custom scorer is honoured; train positives masked on val; val positives masked on test; shape validated |
+| `test_split_check.py` | dispersion index ≈ 1 for a random per-user split and for its simulated reference; an item-biased split is flagged |
+| `test_vae_val_test.py` | the five vectorised reads equal a per-user loop (scores built so every mask matters; k = 2 so min(k, n_rel) bites); the trajectory equals `src.train`'s history for the same overrides |
 
 ## 7.2 The equivalence harness
 

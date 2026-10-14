@@ -1288,3 +1288,121 @@ Every 10/10 result has p = 0.002 (Holm 0.004).
   Untested reading: lambda acts per minibatch and Amazon has ~66 batches per
   epoch against 23 (Gowalla) and 34 (Yelp), so the same lambda is ~3x stronger
   per epoch. Relevant to the lambda choice for H4 (`lambda_scale=per_epoch`).
+
+## VAE-CF on Gowalla: diagnosing the gap (12-14 Oct 2026)
+
+First GPU runs of `arm=vae_cf` (commit 1ce8910, seed 2020, Mult-VAE^PR defaults):
+
+| run | selected epoch | val R@20 | test R@20 | test N@20 | KL | AU |
+|---|---|---|---|---|---|---|
+| protocol (validation selection): `gowalla/vae_cf/seed2020`, `vae_cf_gowalla_s2020.log` | 470 | 0.1578 | 0.1278 | 0.0956 | 71.8 | 93/200 |
+| diagnostic, full training edges, selected on test: `vae_cf_fulltrain_testsel.log` | 10 | -- | 0.1399 | -- | 367 | 200/200 |
+| published Mult-VAE (LightGCN paper, Table 4) | | | 0.1641 | 0.1335 | | |
+
+Protocol run: Gini@20 0.797, tail coverage 0.698, beta 0.141 at the selected
+epoch, 29.8 min. Our LightGCN control matches LightGCN's published figure on
+the same split (0.1823 vs 0.1830), so the gap is specific to the VAE.
+
+**Curves (evaluated every 10 epochs).**
+- Both runs peak at the first or second evaluation (epochs 10-20), lose about
+  5% of test Recall by epoch 50, and stay flat after that.
+- Linear annealing gives beta ~0.006 at epoch 20: 60 updates per epoch, cap
+  reached at about epoch 670. So the KL term is practically off while the
+  model is at its best.
+- Validation Recall stays within 0.150-0.158 for the whole run. Selection took
+  epoch 470 (val 0.1578) over epoch 20 (val 0.1573, test 0.1347).
+
+**Gap decomposition** (seed 2020, approximate):
+
+| piece | test R@20 | size |
+|---|---|---|
+| selection landing late on a flat validation curve | 0.1347 (ep 20) -> 0.1278 (ep 470) | -0.007 |
+| validation items held out of training and of the encoder input | 0.1399 -> 0.1348 (ep 10) | -0.005 |
+| recall denominator, if the published figure came from Liang et al.'s code (hits / min(20, n_rel)); +1.7-2.0% on this model from epoch 5 on | | ~ -0.0025 |
+| remainder | | ~ -0.021 |
+
+On the remainder:
+- The LightGCN paper (§4.1.1) ran Liang's code, tuning dropout in {0, 0.2, 0.5}
+  and beta in {0.2, 0.4, 0.6, 0.8}. We ran only the defaults (dropout 0.5,
+  beta cap 0.2, annealed).
+- The paper does not say which recall denominator was used, or how Liang's
+  held-out-users pipeline was adapted to this split.
+- It says the early stopping and validation strategies are NGCF's, which uses a
+  validation set. LightGCN-PyTorch's `main.py`, however, evaluates on the test
+  file only.
+
+**Why validation stays flat** -- CPU diagnostic, `analysis/vae_val_test.py`.
+- Setup: same split, seed and trainer as the protocol run; 2 CPU cores, ~110
+  s/epoch.
+- It reproduces the GPU curve: test 0.1353 at epoch 10 (GPU 0.1348), 0.1276 at
+  epoch 50 (GPU ~0.127).
+- Reads: `val`/`test` are the protocol's. `val_clean` is validation with test
+  items also masked. `test_matched` is test on a random subset of each user's
+  test items sized like their validation list, with all other held-out items
+  masked. The last two differ only in which items are held out.
+
+| epoch | val | test | test, Liang | test NDCG | val_clean | test_matched | val_clean / test_matched |
+|---|---|---|---|---|---|---|---|
+| 1 | 0.0331 | 0.0441 | 0.0455 | 0.0373 | 0.0335 | 0.0449 | 0.75 |
+| 3 | 0.0969 | 0.1001 | 0.1025 | 0.0854 | 0.0988 | 0.1038 | 0.95 |
+| 5 | 0.1255 | 0.1214 | 0.1238 | 0.0995 | 0.1284 | 0.1241 | 1.03 |
+| 10 | 0.1507 | 0.1353 | 0.1378 | 0.1059 | 0.1548 | 0.1391 | 1.11 |
+| 20 | 0.1555 | 0.1352 | 0.1376 | 0.1005 | 0.1603 | 0.1393 | 1.15 |
+| 30 | 0.1573 | 0.1334 | 0.1356 | 0.0982 | 0.1612 | 0.1373 | 1.17 |
+| 40 | 0.1568 | 0.1289 | 0.1312 | 0.0947 | 0.1606 | 0.1319 | 1.22 |
+| 50 | 0.1553 | 0.1276 | 0.1299 | 0.0930 | 0.1593 | 0.1307 | 1.22 |
+
+Epochs 2, 15 and 25 were also read and fit the pattern. The output came from a
+scratch environment and is not in `runs/`. To reproduce it on the GPU (minutes):
+`python -m analysis.vae_val_test --at 1,2,3,5,10,15,20,25,30,40,50 --out
+runs/_vae_val_test/gowalla_default_s2020.json dataset=gowalla arm=vae_cf seed=2020`.
+
+Reading:
+- From epoch 10 to 50, `test_matched` falls 6.0% while `val_clean` rises 2.9%.
+  This holds with list sizes equalised and masking symmetric, so the divergence
+  is about which items are held out. It is not about list length, and not
+  about test items competing at validation time: `val`/`val_clean` stays at
+  0.970-0.976 from epoch 10 on.
+- Early on, test items are the easier ones (ratio 0.75 at epoch 1, while the
+  model is close to popularity: Gowalla's test items have higher mean training
+  popularity, 91 vs 76). As the model fits the training rows, random training
+  items become the easier ones.
+- Test NDCG peaks at epoch 10 and falls faster than Recall (-12% by epoch 50).
+
+**The split.** `analysis/split_check.py`:
+
+| | item dispersion D, test file | D, simulated random split | val / test Recall, LightGCN control |
+|---|---|---|---|
+| Gowalla | 1.79 | 1.00-1.01 | 1.15 |
+| Yelp2018 | 4.08 | 0.99-1.00 | 1.73 |
+| Amazon-Book | 6.71 | 1.00-1.01 | 2.95 |
+
+D is about 1 for a random per-user split; the reference was simulated, not
+assumed. The test files are not random per-user holdouts, although NGCF
+describes them as such. The files carry no timestamps, so the mechanism is
+unknown. The val/test gap grows in the same order as D: an association across
+three datasets, not a demonstration. Protocol consequences are in
+`docs/CODEBASE_GUIDE.md` §4.4. In short, the protocol stands, comparisons
+between arms are unaffected, and validation can miss a decline confined to
+test items, which is what happened here.
+
+**Doc fix.** The guide put the val > test gap down to list length. The
+diagnostic above refutes that (the ratio is unchanged with list sizes
+equalised); the guide now says so.
+
+**Tuning grid** (launched 14 Oct; rule declared here before any result was seen):
+- Runs: `dataset=gowalla arm=vae_cf seed=2020 arm.vae.beta.schedule=constant`,
+  dropout {0, 0.2, 0.5} x beta {0.2, 0.4, 0.6, 0.8}. Folders
+  `gowalla/vae_cf_grid_d<dropout>_b<beta>/seed2020`, log `vae_cf_grid.log`.
+- Why beta is constant: with annealing on Gowalla the cap never acts at the
+  epochs that matter.
+- Selection: highest validation Recall@20 among the 12 (the protocol).
+- Reported alongside, as diagnostics only:
+  - test Recall at the selected epoch, and the test peak over the run;
+  - Spearman correlation between the validation and test rankings of the 12
+    configurations (does validation rank configurations the way test does);
+  - KL and active units (collapse at high beta / no dropout).
+- Then: the winner at 10 seeds on Gowalla.
+- Yelp and Amazon tuning not yet decided. Options: the same grid on each, about
+  7 h on Yelp and 24 h or more on Amazon; or a reduced grid around the Gowalla
+  winner.

@@ -127,6 +127,11 @@ annealing if collapse appears, and to reporting collapse as a finding if it
 persists.
 
 **S3. No VAE-CF baseline model. — DONE 11 Oct 2026** (`MultVAE`, `src/vae_cf.py`, `arm=vae_cf`).
+*14 Oct:* first GPU run (Gowalla, defaults) is 22% below the published Mult-VAE figure; gap
+diagnosed and a dropout × β grid running (MIGRATION.md, "VAE-CF on Gowalla: diagnosing the
+gap"). Relevant to Phase 3 too: the VAE overfits within ~20 epochs, before linear β annealing
+acts, and validation (a random holdout) can miss a decline confined to test items, because the
+benchmark test files are not random per-user holdouts.
  VAE-CF (Liang et al. 2018) consumes sparse
 `r_u` directly — it is *not* LightGCN with the VAE attached. Separate model
 class. It is a committed baseline (see below).

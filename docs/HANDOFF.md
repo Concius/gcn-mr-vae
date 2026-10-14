@@ -31,13 +31,18 @@
 ## Repository
 - One `Trainer` for every arm; composable loss; Hydra configs; arms `baseline`, `mr_off`,
   `emb_mr`, `coocc_mr`, `emb_mr_fresh`, `emb_mr_dw`, `emb_mr_dw_weaken`, `emb_mr_dw_repel`.
-- 135 tests (22 for Module 3 step 1); `audit_equivalence.py` 24/24 against the notebook (CPU, exact). Mutation
+- 139 tests (22 for Module 3 step 1; 4 for the 14 Oct split / val-test diagnostics); `audit_equivalence.py` 24/24 against the notebook (CPU, exact). Mutation
   sweeps (harness validated with controls): 42/42 guarantees on 3 Oct, plus 15/15 for the
   pair-split code and 21/21 for the λ-sweep analysis on 4 Oct, 24/24 for Module 3 step 1 on
-  11 Oct; the GPU RNG coercion is untestable on CPU (a no-op there).
+  11 Oct, 10/10 for the 14 Oct diagnostics; the GPU RNG coercion is untestable on CPU (a no-op there).
 - Module 3 so far: `arm=vae_cf` (Mult-VAE^PR baseline, `src/vae_cf.py`), collapse
   diagnostics in `src/models/vae.py`, user batches and named RNG streams in `src/sampling.py`.
-  `VAETerm` (GCN-VAE / GCN-MR-VAE) not built. CPU-verified only.
+  `VAETerm` (GCN-VAE / GCN-MR-VAE) not built. First GPU runs 12-13 Oct (Gowalla, seed 2020,
+  defaults): test Recall@20 0.1278 vs published 0.1641; gap diagnosed in MIGRATION.md
+  ("VAE-CF on Gowalla: diagnosing the gap"); dropout × β grid running from 14 Oct.
+- Benchmark splits (14 Oct): the test files are not random per-user holdouts (item
+  dispersion 1.79 / 4.08 / 6.71 vs ≈1.0 for a random split; `analysis/split_check.py`), so a
+  random validation set is not distributed like test. Protocol consequences: guide §4.4.
 - Analysis: `analysis/summarize.py` (groups by run directory, `--dataset`, refuses
   ambiguous arm names), `analysis/compare_kernel.py` and `analysis/compare_split.py`
   and `analysis/lambda_sweep.py` (pre-registered), `analysis/tier0.py`,
@@ -163,9 +168,11 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
    from R); judge on ER and Recall or pick another external reference.
 5. If MR cannot be fixed: a uniformity term (DirectAU) or stable-rank regularisation (Loveland).
 6. **Module 3:** ~~S1–S3 (user batches, diagnostics, Mult-VAE^PR / VAE-CF baseline)~~ — done
-   11 Oct on CPU; first GPU job: `arm=vae_cf` on the three datasets (10 seeds), sanity
-   against published Mult-VAE (LightGCN split: Gowalla 0.1641, Yelp 0.0584, Amazon 0.0407,
-   full training edges). Next: S4, `VAETerm`, Phase 3 (see the proposals in
+   11 Oct on CPU. GPU, Gowalla seed 2020 (12-13 Oct): defaults give test 0.1278 vs published
+   0.1641 (Yelp 0.0584, Amazon 0.0407). Gap: late selection on a flat validation curve (~0.007),
+   held-out validation edges (~0.005), possibly the recall denominator (~0.0025), remainder
+   ~0.021. Running: dropout {0, 0.2, 0.5} × constant β {0.2, 0.4, 0.6, 0.8}, seed 2020, rule
+   declared in MIGRATION.md; then the winner at 10 seeds; Yelp/Amazon tuning to decide. Next: S4, `VAETerm`, Phase 3 (see the proposals in
    `VAE_ROADMAP.md`), the H4 pre-registration committed before any Phase-3 run.
 6b. **Running / queued (started 11 Oct):** Amazon `emb_mr` λ=1e-4, 10 seeds (~45 h; H4 input
    and a third Amazon dose-response point); then MF-BPR (`arm=mr_off model.n_layers=0`,
@@ -211,6 +218,12 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
 - ER of the VAE latent (posterior means) as a collapse measure: scale-invariant, and highest
   in the deliberately collapsed synthetic run. Use KL and active units.
 - Anything about the VAE on the GPU before it has run there.
+- The VAE-CF Gowalla number (0.1278) as the baseline's final figure: defaults only, grid pending.
+- The val > test Recall gap as an effect of list length (refuted 14 Oct), or the benchmark test
+  files as random per-user holdouts (they are not: `analysis/split_check.py`).
+- A mechanism for the non-random split (temporal or otherwise): the files carry no timestamps.
+- Published Mult-VAE numbers as comparable to ours without caveats: full training edges, recall
+  denominator and selection split not stated.
 
 ## `runs/` map
 - `<ds>/mr_off_w100_K3_d256`, `<ds>/emb_mr_w100_lam1e-05_k20_r50_K3_d256` — corrected gate,
@@ -231,7 +244,10 @@ class, not by mechanism: the alignment/uniformity reading stays a hypothesis.
   — λ sweep (10 seeds each); `lambda_sweep_yelp.log`, `lambda_ext_yelp.log`,
   `lambda_stage2_yelp.log`, `_lambda_sweep/yelp2018_curve.csv`.
 - `amazon-book/emb_mr_w100_lam0.0001_k20_r50_K3_d256` — 10 seeds, done 13 Oct (`amazon_lam1e-4.log`);
-  then `<ds>/mr_off_w100_K0_d256` (MF-BPR, `mfbpr.log`). Coming: `<ds>/vae_cf`.
+  then `<ds>/mr_off_w100_K0_d256` (MF-BPR, `mfbpr.log`), 30/30 done.
+- `gowalla/vae_cf/seed2020` — VAE-CF defaults, validation selection (`vae_cf_gowalla_s2020.log`);
+  full-training-edges diagnostic selected on test: `vae_cf_fulltrain_testsel.log`.
+- `gowalla/vae_cf_grid_d<dropout>_b<β>/seed2020` — tuning grid, 12 runs (`vae_cf_grid.log`).
 - `gowalla/emb_mr_dw_{weaken,repel}_w100_lam1e-05_k20_r50_K3_d256` — pair-split, 10 seeds;
   `split.log`. `_crossover_check/checkpoints.csv` and `crossover_check.log` — pre-check.
 
