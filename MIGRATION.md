@@ -1448,3 +1448,41 @@ rises monotonically with beta at both finished dropouts. So:
 - If the winner is at beta = 1.0, beta is extended in steps of 0.2 at that
   dropout until the best is interior (as in the lambda sweep's boundary rule).
 - The published grid stops at 0.8. Its winner is reported as well.
+
+**Grid complete (15 Oct), 3 x 5, seed 2020, validation selection.**
+
+| dropout \ beta | 0.2 | 0.4 | 0.6 | 0.8 | 1.0 |
+|---|---|---|---|---|---|
+| 0 | .1610 / .1334 | .1691 / .1429 | .1734 / .1486 | .1751 / .1496 | .1770 / .1535 |
+| 0.2 | .1658 / .1384 | .1699 / .1466 | .1719 / .1491 | .1754 / .1540 | .1769 / .1575 |
+| 0.5 | .1712 / .1475 | .1742 / .1526 | .1772 / .1544 | .1782 / .1560 | **.1794 / .1593** |
+
+(val R@20 / test R@20 at the selected epoch)
+
+- Selected by the rule: dropout 0.5, beta 1.0. Val 0.1794, test 0.1593, NDCG
+  0.1266, epoch 50, KL 17.3, AU 156/200. Against the defaults: test +25%,
+  NDCG +32%.
+- Best of the published 12-point grid: dropout 0.5, beta 0.8 (test 0.1560).
+- Validation recall rises with beta at every dropout. Validation ranks the 15
+  configurations as test does: Spearman 0.96 against test at the selected
+  epoch, 0.99 against the test peak. Within-run selection costs at most 3.3%.
+- Against the published 0.1641, the winner is 2.9% lower. The protocol effects
+  measured above are larger than that: held-out validation edges about 3.8%,
+  test peak +0.7%, recall denominator about 1.8%. So no unexplained gap
+  remains. This is rough: those effects were measured at the defaults.
+- At beta 1.0 the latent keeps collapsing after the selected epoch. Dropout
+  0.2: AU 195/200 at epoch 30 but 17/200 at epoch 1000, with val falling to
+  0.144. For H4, KL and AU have to be read at the selected checkpoint and
+  compared at equal beta.
+- The winner sits on two edges of the grid, beta 1.0 and dropout 0.5.
+
+**Second extension, declared 15 Oct before running.**
+- Beta: 1.2 and 1.4 at dropout 0.5. Selection stays the highest validation
+  Recall@20 over every configuration run. If that is at the largest beta run,
+  add the next two steps.
+- Dropout is not extended. 0.5 is the top of the published grid and Liang et
+  al.'s default, and the declared rule (14 Oct) extended only beta. This is
+  noted as a limitation.
+
+Log note: the power cut left a run of NUL bytes in `vae_cf_grid.log`, so
+`grep` calls the file binary. Use `grep -a`.
