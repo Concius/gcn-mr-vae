@@ -1486,3 +1486,34 @@ rises monotonically with beta at both finished dropouts. So:
 
 Log note: the power cut left a run of NUL bytes in `vae_cf_grid.log`, so
 `grep` calls the file binary. Use `grep -a`.
+
+**Second extension done (16 Oct): beta 1.0 is interior. Final Gowalla setting:
+dropout 0.5, constant beta 1.0.**
+
+| dropout 0.5, beta | 0.8 | 1.0 | 1.2 | 1.4 |
+|---|---|---|---|---|
+| val R@20 | 0.1782 | **0.1794** | 0.1782 | 0.1778 |
+| test R@20 | 0.1560 | 0.1593 | 0.1587 | 0.1565 |
+| AU at the selected epoch | 173 | 156 | 108 | 31 |
+
+- Above beta 1.0, active units collapse much faster than recall changes:
+  31/200 at 1.4 with test recall 0.1565. Recall barely depends on how many
+  latent dimensions stay active. For H4: higher KL / more active units need
+  not mean better recommendations; report both.
+- An accidental re-launch of beta 1.2 (16 Oct 13:54, stopped at epoch 4) only
+  rewrote that folder's `config.yaml` with an identical config. Its
+  `results.json`, `history.json` and `best.pt` are from the completed run
+  (01:22).
+
+**Next, declared 16 Oct.**
+1. Gowalla, 10 seeds (2020-2029):
+   `arm=vae_cf arm.name=vae_cf_tuned arm.vae.dropout=0.5 arm.vae.beta.schedule=constant arm.vae.beta.cap=1.0`
+   writing to `gowalla/vae_cf_tuned/seed*`. Seed 2020 was the tuning seed and
+   is kept among the ten, as for every other arm.
+2. Yelp and Amazon get a reduced grid: dropout 0.5 x constant beta {0.6, 0.8,
+   1.0, 1.2}, seed 2020, validation selection, with the same boundary rule
+   (extend beta by 0.2 steps on whichever side the winner touches).
+   - Why dropout is fixed: on Gowalla, dropout 0.5 had the highest validation
+     recall at all five beta values.
+   - Cost: a full 3 x 5 grid on Amazon would take an estimated 30 h.
+   - Then the winner at 10 seeds on each dataset, as `vae_cf_tuned`.
