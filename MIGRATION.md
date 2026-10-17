@@ -1548,3 +1548,23 @@ N@20 (AU):
   epoch 30 and 18/200 at epoch 1000.
 - Gowalla `vae_cf_tuned`, 10 seeds: finished 17 Oct (results below once
   summarised).
+
+**Gowalla `vae_cf_tuned`, 10 seeds (2020-2029):** test R@20 0.1581 ± 0.0017,
+N@20 0.1254 ± 0.0022, Gini@20 0.853, tail coverage@20 0.625. Seed 2020 (the
+tuning seed) was 0.1593, inside that spread.
+
+| Gowalla, 10 seeds | R@20 | N@20 | Gini@20 (lower = more even) | tail cov.@20 |
+|---|---|---|---|---|
+| LightGCN (`mr_off_w100_K3_d256`) | 0.1823 ± 0.0003 | 0.1558 ± 0.0003 | 0.900 | 0.421 |
+| VAE-CF tuned | 0.1581 ± 0.0017 | 0.1254 ± 0.0022 | 0.853 | 0.625 |
+| MF-BPR (`mr_off_w100_K0_d256`) | 0.1447 ± 0.0010 | 0.1133 ± 0.0007 | 0.822 | 0.622 |
+
+- Accuracy ranks LightGCN > VAE-CF > MF-BPR, the same order as the published
+  tables. VAE-CF is 13% below LightGCN on recall and 9% above MF-BPR.
+- On diversity the order reverses: VAE-CF covers about 1.5x LightGCN's share of
+  tail items, level with MF-BPR, with a lower Gini than LightGCN.
+- VAE-CF varies about 6x more across seeds than LightGCN. Its best epoch comes
+  early (epochs 30-50), and evaluation every 10 epochs is coarse there.
+- Paired tests for the baseline table run when all three datasets are in.
+- Untested thought for Phase 3: if a GCN-VAE inherits part of the VAE's
+  diversity, that bears on H3 more directly than MR did.
