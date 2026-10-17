@@ -1517,3 +1517,34 @@ dropout 0.5, constant beta 1.0.**
      recall at all five beta values.
    - Cost: a full 3 x 5 grid on Amazon would take an estimated 30 h.
    - Then the winner at 10 seeds on each dataset, as `vae_cf_tuned`.
+
+**Yelp and Amazon reduced grids (done 17 Oct).** Dropout 0.5, constant beta,
+seed 2020, validation selection. Each cell is val R@20 / test R@20 / test
+N@20 (AU):
+
+| beta | Yelp2018 | Amazon-Book |
+|---|---|---|
+| 0.6 | .1020 / .0615 / .0491 (194) | **.1145 / .0410 / .0319 (200)** |
+| 0.8 | .1022 / .0606 / .0487 (187) | .1142 / .0412 / .0320 (198) |
+| 1.0 | **.1028 / .0607 / .0489 (174)** | .1118 / .0409 / .0314 (172) |
+| 1.2 | .1021 / .0605 / .0489 (135) | .1098 / .0407 / .0315 (195) |
+| published Mult-VAE | -- / .0584 / .0450 | -- / .0407 / .0315 |
+
+- **Yelp: beta 1.0, interior. Final.**
+  - The four betas lie within 0.8% on validation and 1.7% on test, and test
+    orders them differently.
+  - With one seed the choice inside this range is immaterial: every option is
+    within 1.7% on test.
+  - Under our protocol (90% of training edges, validation selection) it already
+    exceeds the published figure: +3.9% recall, +8.7% NDCG.
+- **Amazon: beta 0.6, on the lower edge.** Validation falls monotonically with
+  beta, so by the declared rule beta extends downward: 0.4 and 0.2 at dropout
+  0.5. If 0.2 wins, the next two steps (0.1, 0.0) are not a meaningful
+  continuation. In that case the result is reported as "best at the smallest
+  beta tried".
+  - The current winner already matches the published figure (+0.7% recall,
+    +1.3% NDCG).
+- Late collapse again at the highest beta: Amazon beta 1.2 had 195/200 AU at
+  epoch 30 and 18/200 at epoch 1000.
+- Gowalla `vae_cf_tuned`, 10 seeds: finished 17 Oct (results below once
+  summarised).
