@@ -1598,3 +1598,14 @@ This is the same pattern as Gowalla:
   above MF-BPR.
 - Diversity reverses the order: VAE-CF has 1.6x LightGCN's tail coverage.
 - The 10-seed mean is above the published Mult-VAE figure (0.0584 / 0.0450).
+
+**Amazon selection at full precision (18 Oct):** beta 0.2 has val
+0.11608232 and beta 0.4 has 0.11605888. By the declared rule beta 0.2 is
+selected. It is the smallest beta tried, so it is reported as "best at the
+smallest beta tried" and not extended further (beta 0 would remove the KL term).
+
+The margin is 0.02% of validation recall, which is noise; test happens to
+favour 0.4 (0.0426 vs 0.0415). Choosing 0.4 on that basis would be test
+selection, so the rule stands. Even at beta 0.2 the seed-2020 test (0.0415) is
+above the published 0.0407. Amazon 10 seeds:
+`arm.name=vae_cf_tuned arm.vae.dropout=0.5 arm.vae.beta.schedule=constant arm.vae.beta.cap=0.2`.
