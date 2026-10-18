@@ -1568,3 +1568,33 @@ tuning seed) was 0.1593, inside that spread.
 - Paired tests for the baseline table run when all three datasets are in.
 - Untested thought for Phase 3: if a GCN-VAE inherits part of the VAE's
   diversity, that bears on H3 more directly than MR did.
+
+**Amazon extension (18 Oct).** Each cell is val R@20 / test R@20 / test N@20
+(AU):
+- beta 0.2: .1161 / .0415 / .0320 (200)
+- beta 0.4: .1161 / .0426 / .0330 (200)
+
+The two tie at four decimals, so the declared rule (highest validation
+recall, compared at full precision) decides between them:
+- if 0.4 wins, it is interior and final;
+- if 0.2 wins, the result is reported as "best at the smallest beta tried",
+  as declared.
+
+The 10-seed command reads the winner from the files rather than by eye.
+Amazon prefers much weaker KL than Gowalla and Yelp (beta 1.0). Note that
+Amazon has about 1.8x more updates per epoch, so a constant beta acts more
+often per epoch.
+
+**Yelp `vae_cf_tuned`, 10 seeds:**
+
+| Yelp2018, 10 seeds | R@20 | N@20 | Gini@20 | tail cov.@20 |
+|---|---|---|---|---|
+| LightGCN (`mr_off_w100_K3_d256`) | 0.0658 ± 0.0003 | 0.0542 ± 0.0002 | 0.918 | 0.287 |
+| VAE-CF tuned | 0.0603 ± 0.0005 | 0.0485 ± 0.0005 | 0.902 | 0.450 |
+| MF-BPR (`mr_off_w100_K0_d256`) | 0.0480 ± 0.0002 | 0.0388 ± 0.0002 | 0.849 | 0.467 |
+
+This is the same pattern as Gowalla:
+- Accuracy: LightGCN > VAE-CF > MF-BPR. VAE-CF is 8% below LightGCN and 26%
+  above MF-BPR.
+- Diversity reverses the order: VAE-CF has 1.6x LightGCN's tail coverage.
+- The 10-seed mean is above the published Mult-VAE figure (0.0584 / 0.0450).
