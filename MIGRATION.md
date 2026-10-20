@@ -1609,3 +1609,18 @@ favour 0.4 (0.0426 vs 0.0415). Choosing 0.4 on that basis would be test
 selection, so the rule stands. Even at beta 0.2 the seed-2020 test (0.0415) is
 above the published 0.0407. Amazon 10 seeds:
 `arm.name=vae_cf_tuned arm.vae.dropout=0.5 arm.vae.beta.schedule=constant arm.vae.beta.cap=0.2`.
+
+## Baseline table (declared 19 Oct 2026, before the Amazon VAE-CF seeds were read)
+
+`analysis/baselines.py`: LightGCN (`mr_off_w100_K3_d256`), VAE-CF
+(`vae_cf_tuned`) and MF-BPR (`mr_off_w100_K0_d256`) on Gowalla, Yelp2018 and
+Amazon-Book, 10 seeds each.
+- Metrics: test Recall@20, NDCG@20, Gini@20 and tail coverage@20 at the
+  validation-selected checkpoint.
+- Tests: VAE-CF − LightGCN and VAE-CF − MF-BPR, paired by seed, two-sided
+  exact Wilcoxon, Holm within each metric over the six tests.
+- Health gate: no tests are run if any run has a non-finite metric or loss.
+- This is descriptive; no hypothesis rides on it.
+- Verification: 3 tests on a fabricated runs tree (means, sample sd, the 10/10
+  p = 2/1024 with Holm ×6, a null metric, the health gate, a missing arm);
+  mutation check 4/4.

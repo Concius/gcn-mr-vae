@@ -98,6 +98,7 @@ src/
 analysis/      summarize.py: collect results, paired Wilcoxon (Holm across datasets);
                split_check.py: are the benchmark test files random per-user holdouts?
                vae_val_test.py: validation vs test along a VAE-CF run
+               baselines.py: LightGCN / VAE-CF / MF-BPR table with paired tests
 scripts/       run_gate.sh, run_sweep.sh, run_tests.sh
 tests/         metrics, Laplacian, split, end-to-end smoke on a synthetic dataset
 audit_equivalence.py   reimplements the notebook's loss and Test() loop and diffs them against the port

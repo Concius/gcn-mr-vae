@@ -149,9 +149,10 @@ gcn-mr-vae/
 │   ├── config_diff.py    would a command reproduce an existing run's config?
 │   ├── split_check.py    is a benchmark's test file a random per-user holdout? (item dispersion)
 │   ├── vae_val_test.py   validation vs test along one VAE-CF trajectory, list size and masking equalised
+│   ├── baselines.py      baseline table: LightGCN, VAE-CF (tuned), MF-BPR; paired tests, Holm per metric
 │   └── tier0.py          interpretation: trajectory, norms/angles, alignment/uniformity, spectrum
 ├── scripts/            run_gate.sh, run_sweep.sh, run_tests.sh
-├── tests/              139 automated tests (see Part 7 and MIGRATION.md)
+├── tests/              142 automated tests (see Part 7 and MIGRATION.md)
 ├── audit_equivalence.py    proves the port matches the notebook numerically
 ├── docs/               this guide
 ├── MIGRATION.md        cell-by-cell map from the notebook, fix log, audit log
@@ -359,11 +360,15 @@ Checks, from the files alone, whether a benchmark's `test.txt` behaves like a un
 
 Trains one VAE-CF run exactly as `src.train` would (same composed config, `set_seed`, `build_vae_cf`, `VAECFTrainer.train_epoch`; tested to reproduce `src.train`'s history) and, at chosen epochs, reads one set of scores five ways: the protocol's validation and test Recall@20; test Recall with Liang et al.'s denominator min(20, n_rel) and NDCG@20; validation Recall with test items also masked (`val_clean`); and test Recall on a fixed random subset of each user's test items sized like their validation list, with the other held-out items masked (`test_matched`). `val_clean` and `test_matched` differ only in where the relevant items come from. `python -m analysis.vae_val_test --at 1,5,10,20,50 --out runs/_vae_val_test/<name>.json dataset=gowalla arm=vae_cf seed=2020 [overrides]`. About 2 minutes per epoch on 2 CPU cores for Gowalla; seconds on the GPU.
 
-## 3.19 `scripts/`
+## 3.19 `analysis/baselines.py`
+
+The baseline table under the corrected protocol: LightGCN (`mr_off_w100_K3_d256`), VAE-CF (`vae_cf_tuned`) and MF-BPR (`mr_off_w100_K0_d256`) on the three datasets. It reports mean ± sd of test Recall@20, NDCG@20, Gini@20 and tail coverage@20 at the validation-selected checkpoint. It then runs paired two-sided exact Wilcoxon tests by seed, VAE-CF − LightGCN and VAE-CF − MF-BPR, with Holm within each metric over the six tests. A health gate blocks the tests if any run has a non-finite metric or loss. `python -m analysis.baselines` writes `runs/_baselines/baselines_{describe,tests}.csv`.
+
+## 3.20 `scripts/`
 
 `run_gate.sh` launches the September gate (two arms × five seeds on Gowalla) and summarises. `run_sweep.sh` does all three datasets. `run_tests.sh` is `pytest tests -q`. All accept extra Hydra overrides as arguments.
 
-## 3.20 `tests/` and `audit_equivalence.py`
+## 3.21 `tests/` and `audit_equivalence.py`
 
 Described in Part 7.
 
@@ -710,7 +715,7 @@ The numbers will move. Expect: lower absolute Recall (90% of edges; no selection
 
 ## 7.1 The test suite
 
-`python -m pytest tests -q` — 139 tests, about 30 seconds on CPU. The table lists the original files and the two added on 14 Oct 2026; the others are described where they were added, in MIGRATION.md.
+`python -m pytest tests -q` — 142 tests, about 30 seconds on CPU. The table lists the original files and those added from 14 Oct 2026; the others are described where they were added, in MIGRATION.md.
 
 | file | what it pins down |
 |---|---|
@@ -720,6 +725,7 @@ The numbers will move. Expect: lower absolute Recall (90% of edges; no selection
 | `test_smoke.py` | every arm runs end-to-end; `mr_off` and `emb_mr` produce identical warm-up curves and identical ER at the transition; warm-start save→load resumes with the correct budget; selection on test only when explicitly asked; **W = 0 captures the initial reference** (regression for defect 9); both ER conventions reported; popularity segmentation independent of `val_frac` |
 | `test_scorer.py` | default scorer = inline dot product; a custom scorer is honoured; train positives masked on val; val positives masked on test; shape validated |
 | `test_split_check.py` | dispersion index ≈ 1 for a random per-user split and for its simulated reference; an item-biased split is flagged |
+| `test_baselines.py` | table means and sample sd; a 10/10 difference gives p = 2/1024 and Holm ×6; noise gives no effect; an unhealthy run blocks all tests; a missing arm is reported and its tests skipped |
 | `test_vae_val_test.py` | the five vectorised reads equal a per-user loop (scores built so every mask matters; k = 2 so min(k, n_rel) bites); the trajectory equals `src.train`'s history for the same overrides |
 
 ## 7.2 The equivalence harness
