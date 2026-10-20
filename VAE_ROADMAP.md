@@ -5,8 +5,8 @@
 > Details and verification in `MIGRATION.md` ("Module 3, step 1"). Open: S4,
 > `VAETerm` for GCN-VAE / GCN-MR-VAE, and B2/B3.
 >
-> **Proposed 11 Oct, not yet adopted** (see the Part 3 discussion; to confirm
-> with Pedronette where he has a view):
+> **Proposed 11 Oct, not yet adopted** (to confirm with Pedronette where he
+> has a view):
 > - *Phase 3 as a separate stage* that loads a Phase-2 `best.pt`, instead of a
 >   phase list in the trainer. Every Phase-2 checkpoint H4 needs already exists
 >   (Gowalla and Yelp at every swept lambda, Amazon at 0 and 1e-5; Amazon 1e-4
@@ -62,7 +62,7 @@ November.
 | Budget matching + val selection + warm-start resume | H4's comparison (GCN-VAE vs GCN-MR-VAE) is exactly the two-arm design already built; both branch from the same Phase-2 checkpoint |
 | `src/metrics/geometry.py` | ER / NP / NP_ref take any matrix — they work on `Z_MR` *and* on the VAE latent `z` unchanged |
 | `analysis/summarize.py` | arm-agnostic; H4's paired Wilcoxon comes free once the runs exist |
-| `src/data/synthetic.py` | the plan (Feb 2026 chat, §6.3 risk register) says build the VAE on tiny data first — the generator is there |
+| `src/data/synthetic.py` | the plan (Feb 2026, §6.3 risk register) says build the VAE on tiny data first — the generator is there |
 | MF-BPR baseline | `model.n_layers=0` already reduces to MF-BPR; regression-tested |
 
 ---
@@ -190,7 +190,7 @@ with diagnostics good enough to say *why*.
 
 ---
 
-## Details from earlier chats and the text worth not losing
+## Details from earlier notes and the text worth not losing
 
 - **DirectAU is no longer a committed baseline.** You decided to remove it
   rather than hedge it, applied at six sites including inside the Figura 7

@@ -1624,3 +1624,39 @@ Amazon-Book, 10 seeds each.
 - Verification: 3 tests on a fabricated runs tree (means, sample sd, the 10/10
   p = 2/1024 with Holm ×6, a null metric, the health gate, a missing arm);
   mutation check 4/4.
+
+**Results (19 Oct), `python -m analysis.baselines`, 10 seeds per arm, 90 runs
+healthy.** Test metrics at the validation-selected checkpoint:
+
+| dataset | arm | R@20 | N@20 | Gini@20 | tail cov.@20 |
+|---|---|---|---|---|---|
+| Gowalla | LightGCN | 0.1823 ± 0.0003 | 0.1558 ± 0.0003 | 0.900 | 0.421 |
+| | VAE-CF | 0.1581 ± 0.0017 | 0.1254 ± 0.0022 | 0.853 | 0.625 |
+| | MF-BPR | 0.1447 ± 0.0010 | 0.1133 ± 0.0007 | 0.822 | 0.622 |
+| Yelp2018 | LightGCN | 0.0658 ± 0.0003 | 0.0542 ± 0.0002 | 0.918 | 0.287 |
+| | VAE-CF | 0.0603 ± 0.0005 | 0.0485 ± 0.0005 | 0.902 | 0.450 |
+| | MF-BPR | 0.0480 ± 0.0002 | 0.0388 ± 0.0002 | 0.849 | 0.467 |
+| Amazon-Book | LightGCN | 0.0464 ± 0.0002 | 0.0361 ± 0.0001 | 0.916 | 0.309 |
+| | VAE-CF | 0.0413 ± 0.0004 | 0.0319 ± 0.0004 | 0.806 | 0.623 |
+| | MF-BPR | 0.0428 ± 0.0003 | 0.0332 ± 0.0002 | 0.852 | 0.451 |
+
+Every test below is 10/10 with Holm-adjusted p = 0.0117, except the two marked
+n.s.
+- **VAE-CF vs LightGCN.** Recall -13.3% / -8.4% / -11.0% (Gowalla / Yelp /
+  Amazon); NDCG -19.5% / -10.5% / -11.8%. Gini is lower (better) on all three:
+  -5.3% / -1.7% / -12.0%. Tail coverage is higher: +49% / +57% / +102%.
+- **VAE-CF vs MF-BPR.**
+  - Recall +9.2% on Gowalla and +25.7% on Yelp, but -3.5% on Amazon.
+  - NDCG +10.7%, +25.0%, -4.0%.
+  - Gini is higher (worse) on Gowalla and Yelp (+3.7%, +6.3%) and lower on
+    Amazon (-5.3%).
+  - Tail coverage: Gowalla +0.5% (5/10, p 0.77, n.s.), Yelp -3.6% (4/10,
+    Holm 0.64, n.s.), Amazon +38%.
+- **Reading.**
+  - LightGCN is the most accurate everywhere and the least diverse.
+  - VAE-CF trades accuracy for diversity on every dataset.
+  - On Amazon VAE-CF falls below MF-BPR on accuracy. Its selected beta (0.2)
+    is the smallest tried, so a further-tuned VAE-CF could do better there;
+    this is a caveat, not a finding.
+- The VAE-CF Amazon mean (0.0413) is above the published Mult-VAE figure
+  (0.0407), as on Yelp; on Gowalla it is 3.7% below (0.1581 vs 0.1641).
