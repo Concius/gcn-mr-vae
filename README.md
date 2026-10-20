@@ -11,7 +11,6 @@ the Nov 2026 – Jan 2027 build plan. **Start with
 science, the code, the protocol, and the migration, written for both
 non-programmers and maintainers.
 
-## Install (local, RTX 5060 Ti / Pop!_OS)
 
 The 5060 Ti is Blackwell (sm_120); it needs a CUDA 12.8+ PyTorch wheel.
 
@@ -47,7 +46,7 @@ python -m src.train -m dataset=gowalla arm=emb_mr seed=2020 arm.lambda_manifold=
 python -m analysis.summarize runs --a emb_mr --b mr_off --metric recall@20
 ```
 
-Long runs: `tmux new -s gate`, launch, `Ctrl-b d`, come back later.
+Long runs: `tmux new -s gate`, launch, `Ctrl-b d`
 Each run writes `runs/<dataset>/<arm>/seed<seed>/{config.yaml, history.json, best.pt, results.json}`.
 
 ## Arms
